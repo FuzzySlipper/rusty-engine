@@ -13,6 +13,11 @@
 // (tile·side + 0.5 + (c + 1) / 2 · (side − 1)) / atlas size, as the cards
 // were trained: linear filtering never reaches a neighbouring tile.
 //
+// A card draws only the part of that rectangle its tile can show: the
+// corners t = (c + 1) / 2 in [lo, hi]², `card_rect`, where every texel the
+// filter reads outside it has zero alpha, so every fragment cut was one
+// `card_colour` dropped. Its uv follows t as before.
+//
 // The atlas holds display-referred colour and straight alpha, as a Gaussian's
 // colour is: the layer blends it as it is and only the composite decodes it.
 
@@ -24,7 +29,7 @@
 //     lowest);
 // [1] rotation xy and zw (snorm16 pairs, xyzw: local x along u, y along v),
 //     half-extents along x and y (an f16 pair, metres), the tile's side in
-//     texels.
+//     texels (u16) and above it the drawn rectangle (`card_rect`).
 struct Card {
     centre_tile: vec4<u32>,
     frame: vec4<u32>,
@@ -34,7 +39,8 @@ struct Card {
 // in the pass's clip space; `motion`: xy its centre's motion in target
 // pixels, zw in a lit run its normal's view-space xy; `multiplier`: rgb its
 // instance's colour multiplier in linear light; `look`: x its tile's
-// top-left texel (as the resource's), y the tile's side, z its group's tint
+// top-left texel (as the resource's), y the tile's side and drawn rectangle
+// (as the resource's), z its group's tint
 // (sRGB target rgb and weight, unorm8), w 1 when it draws its colour from
 // the albedo atlas.
 struct ProjectedCard {
@@ -58,6 +64,16 @@ struct ProjectedCard {
 @group(1) @binding(41) var atlas_sampler: sampler;
 @group(1) @binding(42) var albedo_atlas: texture_2d<f32>;
 
+// The corners a card draws, as t = (c + 1) / 2 along its x and y: xy the
+// lowest, zw the highest. The word's top half cuts each edge in fifteenths
+// of the tile's span, 4 bits each, lowest first: left, top, right, bottom.
+// No cut draws the whole card; cuts that cross draw nothing.
+fn card_rect(word: u32) -> vec4<f32> {
+    let lo = vec2<f32>(f32((word >> 16u) & 0xfu), f32((word >> 20u) & 0xfu));
+    let hi = vec2<f32>(f32(15u - ((word >> 24u) & 0xfu)), f32(15u - (word >> 28u)));
+    return vec4<f32>(lo, hi) / 15.0;
+}
+
 @compute @workgroup_size(256)
 fn cs_project_card(@builtin(global_invocation_id) id: vec3<u32>) {
     let index = id.x;
@@ -69,6 +85,11 @@ fn cs_project_card(@builtin(global_invocation_id) id: vec3<u32>) {
         draw_args.vertex_count = 4u;
     }
     let card = cards[index];
+    let rect = card_rect(card.frame.w);
+    if any(rect.xy > rect.zw) {
+        cull(slot);
+        return;
+    }
     var centre = bitcast<vec3<f32>>(card.centre_tile.xyz);
     let rotation = vec4<f32>(unpack2x16snorm(card.frame.x), unpack2x16snorm(card.frame.y));
     let r = rotation_matrix(rotation / max(length(rotation), 1e-8));
@@ -104,9 +125,9 @@ fn cs_project_card(@builtin(global_invocation_id) id: vec3<u32>) {
         cull(slot);
         return;
     }
-    // Dropped when all four corners lie beyond one side of the view, or
-    // when, all in front of the eye, they lie behind the opaque depth over
-    // their box from their nearest depth on.
+    // Dropped when all four corners it draws lie beyond one side of the
+    // view, or when, all in front of the eye, they lie behind the opaque
+    // depth over their box from their nearest depth on.
     var beyond = vec3<bool>(true);
     var behind = vec3<bool>(true);
     var in_front = true;
@@ -114,7 +135,7 @@ fn cs_project_card(@builtin(global_invocation_id) id: vec3<u32>) {
     var high = vec2<f32>(-1e30);
     var nearest = 1.0;
     for (var corner = 0u; corner < 4u; corner = corner + 1u) {
-        let c = vec2<f32>(f32(corner & 1u), f32(corner >> 1u)) * 2.0 - 1.0;
+        let c = select(rect.xy, rect.zw, vec2<bool>((corner & 1u) != 0u, (corner >> 1u) != 0u)) * 2.0 - 1.0;
         let p = clip + c.x * clip_u + c.y * clip_v;
         beyond = beyond & (p.xyz > vec3<f32>(p.w));
         behind = behind & (p.xyz < vec3<f32>(-p.w, -p.w, 0.0));
@@ -175,12 +196,14 @@ fn vs_card(
     @builtin(instance_index) instance: u32,
 ) -> CardVarying {
     let card = drawn[order[instance]];
-    let corner = vec2<f32>(f32(vertex & 1u), f32((vertex >> 1u) & 1u)) * 2.0 - 1.0;
+    let rect = card_rect(card.look.y);
+    let t = select(rect.xy, rect.zw, vec2<bool>((vertex & 1u) != 0u, (vertex & 2u) != 0u));
+    let corner = t * 2.0 - 1.0;
     let tile = vec2<f32>(f32(card.look.x & 0xffffu), f32(card.look.x >> 16u));
-    let side = f32(card.look.y);
+    let side = f32(card.look.y & 0xffffu);
     var out: CardVarying;
     out.position = card.centre + corner.x * card.u + corner.y * card.v;
-    out.uv = (tile + 0.5 + (corner + 1.0) * 0.5 * (side - 1.0)) / vec2<f32>(textureDimensions(atlas));
+    out.uv = (tile + 0.5 + t * (side - 1.0)) / vec2<f32>(textureDimensions(atlas));
     out.tint = unpack4x8unorm(card.look.z);
     out.multiplier = card.multiplier.rgb;
     out.motion = card.motion.xy;

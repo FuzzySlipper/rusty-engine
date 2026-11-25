@@ -10,7 +10,9 @@
 // gsplat): the 3D covariance projected through the view's Jacobian, 0.3 px²
 // added to its diagonal, a quad reaching 2·sqrt(2λ) along each eigen-axis
 // and the normalised falloff (exp(−4A) − exp(−4)) / (1 − exp(−4)) over
-// A = |uv|² inside it, alpha under 1/255 dropped.
+// A = |uv|² inside it, alpha under 1/255 dropped. The quad drawn is cut,
+// its uv with it, to where its opacity times the falloff can still reach
+// 1/255 (`alpha_reach`): the fragments past that were all dropped.
 //
 // Splat colours are display-referred (sRGB-encoded) and were trained by
 // blending those values, so a layer blends them as they are and only the
@@ -39,7 +41,8 @@ struct Gaussian {
 
 // One projected Gaussian of a run: where its quad stands and what it draws.
 // `centre`: in NDC (x, y, depth); `color`: packed as the resource's;
-// `axes`: the quad's two half axes in NDC (x, y, then x, y); `motion`: xy
+// `axes`: the quad's two half axes in NDC (x, y, then x, y), at A = 1, which
+// the colour pass cuts by `alpha_reach` and a caster by its own cut; `motion`: xy
 // its centre's motion in target pixels (`rusty::motion`), zw in a lit run
 // its normal's view-space xy.
 struct Projected {
@@ -79,6 +82,19 @@ const INVALID: u32 = 0xffffffffu;
 // Blocks' counts each invocation scans: 256 · 16 = 4096 blocks of `TILE`,
 // a run's most.
 const COMPACT_ITEMS: u32 = 16u;
+
+const EXP4: f32 = 0.018315639;
+// Added to the cut's A, so a fragment the falloff's rounding keeps is never
+// cut: alpha at A + this is still 1.5% under the cut's.
+const REACH_MARGIN: f32 = 1.0 / 256.0;
+
+// How far along its quad's half axes, as |uv|, a Gaussian of `opacity`
+// draws: opacity · (e^−4A − e^−4) / (1 − e^−4) ≥ `ALPHA_MIN` within
+// |uv|² ≤ A, at most the whole quad.
+fn alpha_reach(opacity: f32) -> f32 {
+    let falloff = ALPHA_MIN / max(opacity, ALPHA_MIN) * (1.0 - EXP4) + EXP4;
+    return sqrt(min(-log(falloff) * 0.25 + REACH_MARGIN, 1.0));
+}
 
 @group(0) @binding(1) var<storage, read_write> projected: array<Projected>;
 @group(1) @binding(0) var<storage, read> gaussians: array<Gaussian>;
@@ -227,7 +243,8 @@ fn cs_project(@builtin(global_invocation_id) id: vec3<u32>) {
     let l2 = 2.0 * min(sqrt(2.0 * lambda2), longest);
 
     let ndc = clip.xyz / clip.w;
-    let reach = vec2<f32>(max(l1, l2)) * 2.0 / size;
+    let cut = alpha_reach(color.a);
+    let reach = vec2<f32>(max(l1, l2) * cut) * 2.0 / size;
     if any(abs(ndc.xy) - reach > vec2<f32>(1.0)) || ndc.z < 0.0 || ndc.z > 1.0 {
         cull(slot);
         return;
@@ -240,7 +257,7 @@ fn cs_project(@builtin(global_invocation_id) id: vec3<u32>) {
     let axis2 = l2 * vec2<f32>(direction.y, -direction.x) * to_ndc;
     // Its quad's box in target pixels, all of it at its centre's depth.
     let centre_pixel = project.pixels.xy + ndc.xy * project.pixels.zw;
-    let half_box = (abs(axis1) + abs(axis2)) * abs(project.pixels.zw);
+    let half_box = (abs(axis1) + abs(axis2)) * cut * abs(project.pixels.zw);
     if hidden(centre_pixel - half_box, centre_pixel + half_box, ndc.z) {
         cull(slot);
         return;
@@ -568,7 +585,8 @@ fn vs_splat(
     @builtin(instance_index) instance: u32,
 ) -> SplatVarying {
     let splat = drawn[order[instance]];
-    let corner = vec2<f32>(f32(vertex & 1u), f32((vertex >> 1u) & 1u)) * 2.0 - 1.0;
+    let color = unpack4x8unorm(splat.color);
+    let corner = (vec2<f32>(f32(vertex & 1u), f32((vertex >> 1u) & 1u)) * 2.0 - 1.0) * alpha_reach(color.a);
     var out: SplatVarying;
     out.position = vec4<f32>(
         splat.centre.xy + corner.x * splat.axes.xy + corner.y * splat.axes.zw,
@@ -576,13 +594,11 @@ fn vs_splat(
         1.0,
     );
     out.uv = corner;
-    out.color = unpack4x8unorm(splat.color);
+    out.color = color;
     out.motion = splat.motion.xy;
     out.normal = splat.motion.zw;
     return out;
 }
-
-const EXP4: f32 = 0.018315639;
 
 struct SplatOut {
     // Premultiplied, in display space.

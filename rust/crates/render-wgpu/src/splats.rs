@@ -794,18 +794,21 @@ impl Splats {
 
     /// Upload a splat primitive's Gaussians or cards, or `None` on a device
     /// that draws no splats. Cards draw with `atlas`, their asset's
-    /// ([`Self::card_atlas`]).
+    /// ([`Self::card_atlas`]), whose colour image cuts each card to the part
+    /// its tile shows.
     pub fn upload(
         &self,
         gpu: &Gpu,
         label: &str,
         splats: &GlbSplats,
-        atlas: Option<&CardAtlas>,
+        atlas: Option<(&CardAtlas, &crate::resources::DecodedImage)>,
     ) -> Option<SplatSet> {
         let pipelines = self.pipelines.as_ref()?;
-        let (words, bounds) = match &splats.cards {
-            Some(cards) => card_words(splats, cards),
-            None => gaussian_words(splats),
+        let (words, bounds) = match (&splats.cards, atlas) {
+            (Some(cards), Some((_, image))) => card_words(splats, cards, image),
+            // Cards without their atlas draw nothing.
+            (Some(_), None) => return None,
+            (None, _) => gaussian_words(splats),
         };
         let count = splats.centres.len() as u32;
         let skin = skin_words(splats);
@@ -844,12 +847,11 @@ impl Splats {
                 },
             ],
         });
-        let cards = match (&splats.cards, atlas) {
-            (Some(_), Some(atlas)) => Some(atlas.clone()),
-            // Cards without their atlas draw nothing.
-            (Some(_), None) => return None,
-            (None, _) => None,
-        };
+        let cards = splats
+            .cards
+            .as_ref()
+            .and(atlas)
+            .map(|(atlas, _)| atlas.clone());
         Some(SplatSet {
             count,
             bounds,
@@ -2952,8 +2954,13 @@ pub(crate) fn gaussian_words(splats: &GlbSplats) -> (Vec<u32>, Aabb) {
 }
 
 /// The GPU words of a card primitive's cards (`splat_cards.wgsl` `Card`)
-/// and their bounds, each card's centre to its half-diagonal.
-fn card_words(splats: &GlbSplats, cards: &crate::glb::GlbCards) -> (Vec<u32>, Aabb) {
+/// and their bounds, each card's centre to its half-diagonal. `atlas` is
+/// the colour atlas their tiles cut them by ([`card_cuts`]).
+fn card_words(
+    splats: &GlbSplats,
+    cards: &crate::glb::GlbCards,
+    atlas: &crate::resources::DecodedImage,
+) -> (Vec<u32>, Aabb) {
     let mut words = Vec::with_capacity(splats.centres.len() * 8);
     let mut bounds = Aabb::EMPTY;
     let side = cards.tile_pixels.min(u32::from(u16::MAX));
@@ -2975,7 +2982,7 @@ fn card_words(splats: &GlbSplats, cards: &crate::glb::GlbCards) -> (Vec<u32>, Aa
         words.extend_from_slice(&rotation_words(*rotation));
         words.extend_from_slice(&[
             u32::from(half_bits(x)) | u32::from(half_bits(y)) << 16,
-            side,
+            side | card_cuts(atlas, [texel(tile[0]), texel(tile[1])], side) << 16,
         ]);
         let centre = Vec3::from(*centre);
         let reach = Vec3::splat(splat_reach(splats, index));
@@ -2983,6 +2990,43 @@ fn card_words(splats: &GlbSplats, cards: &crate::glb::GlbCards) -> (Vec<u32>, Aa
         bounds.include(centre + reach);
     }
     (words, bounds)
+}
+
+/// The steps of a card's span (`splat_cards.wgsl` `card_rect`) its cuts
+/// count in: 4 bits each.
+const CARD_CUT_STEPS: u32 = 15;
+
+/// How far a card's edges come in (`splat_cards.wgsl` `card_rect`: left,
+/// top, right, bottom, 4 bits each), so it draws only where its tile at
+/// texel `origin`, `side` texels a side, can show. A fragment at q texels
+/// from the tile's first texel centre filters texels ⌊q⌋ and ⌊q⌋ + 1, so it
+/// can show only within one texel of a texel with alpha: past that its
+/// alpha is 0 and `fs_card` drops it. A tile with no alpha draws nothing;
+/// one not wholly inside the atlas, which the sampler clamps, is not cut.
+fn card_cuts(atlas: &crate::resources::DecodedImage, origin: [u32; 2], side: u32) -> u32 {
+    let span = side.saturating_sub(1);
+    if span == 0 || origin[0] + side > atlas.width || origin[1] + side > atlas.height {
+        return 0;
+    }
+    let (mut low, mut high) = ([side; 2], [0u32; 2]);
+    for y in 0..side {
+        let row = ((origin[1] + y) * atlas.width + origin[0]) as usize * 4;
+        for x in 0..side {
+            if atlas.rgba[row + x as usize * 4 + 3] != 0 {
+                low = [low[0].min(x), low[1].min(y)];
+                high = [high[0].max(x), high[1].max(y)];
+            }
+        }
+    }
+    if low[0] > high[0] {
+        // Cuts that cross: lo 15/15 and hi 0/15.
+        return CARD_CUT_STEPS | CARD_CUT_STEPS << 8;
+    }
+    // In steps, the lowest rounded down and the highest up.
+    let lo = low.map(|texel| texel.saturating_sub(1) * CARD_CUT_STEPS / span);
+    let hi =
+        high.map(|texel| CARD_CUT_STEPS - ((texel + 1).min(span) * CARD_CUT_STEPS).div_ceil(span));
+    lo[0] | lo[1] << 4 | hi[0] << 8 | hi[1] << 12
 }
 
 /// A unit quaternion xyzw as two snorm16 pairs.
@@ -3249,6 +3293,29 @@ fn half_bits(value: f32) -> u16 {
 mod tests {
     use super::*;
     use crate::frame::PixelRect;
+
+    /// A card is cut to one texel past its tile's alpha on each side, in
+    /// fifteenths of a 16-texel tile's span (one texel each); a tile with
+    /// none draws nothing, and one with alpha at its edges or past the
+    /// atlas is not cut.
+    #[test]
+    fn a_card_is_cut_to_within_a_texel_of_its_tiles_alpha() {
+        let mut atlas = crate::resources::DecodedImage {
+            width: 48,
+            height: 16,
+            rgba: vec![0; 48 * 16 * 4],
+        };
+        let mut alpha = |x: u32, y: u32| atlas.rgba[((y * 48 + x) * 4 + 3) as usize] = 1;
+        alpha(5, 3);
+        alpha(9, 12);
+        alpha(32, 7);
+        alpha(47, 15);
+        let cuts = |x: u32| card_cuts(&atlas, [x, 0], 16);
+        assert_eq!(cuts(0), 4 | 2 << 4 | 5 << 8 | 2 << 12);
+        assert_eq!(cuts(16), 15 | 15 << 8, "no alpha: cuts that cross");
+        assert_eq!(cuts(32), 6 << 4, "alpha at its left and right edges");
+        assert_eq!(card_cuts(&atlas, [40, 0], 16), 0, "past the atlas");
+    }
 
     fn read_words(gpu: &Gpu, buffer: &wgpu::Buffer, words: u64) -> Vec<u32> {
         let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor {

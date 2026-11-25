@@ -634,11 +634,15 @@ impl Renderer {
                         })
                         .clone()
                 });
+                let image = splats
+                    .cards
+                    .as_ref()
+                    .and_then(|cards| model.textures.get(cards.atlas)?.image.as_ref());
                 let Some(set) = self.splats.upload(
                     &self.gpu,
                     &format!("{label} splats {mesh_index}/{primitive_index}"),
                     splats,
-                    atlas.as_ref(),
+                    atlas.as_ref().zip(image),
                 ) else {
                     continue;
                 };

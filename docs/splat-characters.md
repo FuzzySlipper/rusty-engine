@@ -103,6 +103,13 @@ which a lit figure draws.
   perspective-correct across it, sampled linearly, so it never reaches a
   neighbouring tile. A fragment's alpha is the texel's, at most 0.99, and
   under 1/255 it draws nothing. Cards are drawn from both sides.
+- **Cut to its tile.** When a set is uploaded, each card's rectangle is cut
+  to within one texel of its tile's texels with any alpha, in fifteenths of
+  the tile, rounded outward: past that the filter reads only zero alpha, so
+  no fragment cut would have drawn. The cut rides in the spare half of the
+  word that holds the tile's side, so it adds no resident bytes. A card
+  whose tile has no alpha is dropped when projected. Villager 381's cards
+  keep 94% of their area: his tiles' alpha is a soft disc.
 - **Skinned**, the blend of a card's joints moves its centre and carries
   its half-axes, as it carries the figure around it.
 - **Refused:** a missing attribute, attributes of different lengths,
@@ -148,32 +155,35 @@ A card's depth is its plane's at each pixel, not its centre's.
 **Cost.** Villager 381 walking in `examples/splat_crowd`'s layout, as
 6,144 cards and as his 15,908- and 31,798-Gaussian bodies, on an RTX 3080 at 1920 ×
 1080: the `splats` pass, and the run's projection, sort and draw timed
-apart, ms, median of three rounds. Close is the crowd's default camera
-(3.3 to 10.7 m away); far is 42 m, the figures about 60 pixels tall.
+apart, ms, median of three rounds; the sort includes the compaction before
+it. Close is the crowd's default camera (3.3 to 10.7 m away); far is 42 m,
+the figures about 60 pixels tall.
 
 | Figures | Body | Close: splats | project | sort | draw | Far: splats | project | sort | draw |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | cards | 0.24 | 0.006 | 0.046 | 0.170 | 0.08 | 0.006 | 0.046 | 0.014 |
-| 1 | 16k Gaussians | 0.20 | 0.007 | 0.046 | 0.128 | 0.10 | 0.007 | 0.046 | 0.029 |
-| 1 | 32k Gaussians | 0.24 | 0.010 | 0.047 | 0.171 | 0.12 | 0.009 | 0.047 | 0.052 |
-| 8 | cards | 0.65 | 0.036 | 0.051 | 0.545 | 0.18 | 0.036 | 0.051 | 0.076 |
-| 8 | 16k Gaussians | 0.57 | 0.044 | 0.063 | 0.443 | 0.29 | 0.044 | 0.063 | 0.169 |
-| 8 | 32k Gaussians | 0.80 | 0.058 | 0.090 | 0.626 | 0.49 | 0.058 | 0.090 | 0.328 |
-| 16 | cards | 0.81 | 0.073 | 0.058 | 0.657 | 0.23 | 0.083 | 0.066 | 0.099 |
-| 16 | 16k Gaussians | 0.78 | 0.088 | 0.090 | 0.589 | 0.40 | 0.088 | 0.091 | 0.206 |
-| 16 | 32k Gaussians | 1.15 | 0.119 | 0.149 | 0.869 | 0.68 | 0.118 | 0.147 | 0.404 |
-| 32 | cards | 0.98 | 0.147 | 0.080 | 0.739 | 0.40 | 0.144 | 0.078 | 0.164 |
-| 32 | 16k Gaussians | 1.12 | 0.174 | 0.147 | 0.788 | 0.73 | 0.174 | 0.147 | 0.393 |
-| 32 | 32k Gaussians | 1.74 | 0.233 | 0.248 | 1.243 | 1.27 | 0.233 | 0.248 | 0.770 |
+| 1 | cards | 0.31 | 0.008 | 0.096 | 0.192 | 0.13 | 0.007 | 0.095 | 0.016 |
+| 1 | 16k Gaussians | 0.26 | 0.009 | 0.096 | 0.140 | 0.15 | 0.009 | 0.096 | 0.033 |
+| 1 | 32k Gaussians | 0.31 | 0.012 | 0.096 | 0.188 | 0.18 | 0.012 | 0.096 | 0.060 |
+| 8 | cards | 0.67 | 0.038 | 0.090 | 0.528 | 0.25 | 0.043 | 0.101 | 0.093 |
+| 8 | 16k Gaussians | 0.60 | 0.048 | 0.115 | 0.479 | 0.36 | 0.050 | 0.118 | 0.193 |
+| 8 | 32k Gaussians | 0.83 | 0.061 | 0.133 | 0.619 | 0.53 | 0.066 | 0.143 | 0.351 |
+| 16 | cards | 0.83 | 0.077 | 0.099 | 0.640 | 0.28 | 0.078 | 0.097 | 0.093 |
+| 16 | 16k Gaussians | 0.81 | 0.088 | 0.134 | 0.578 | 0.44 | 0.088 | 0.133 | 0.205 |
+| 16 | 32k Gaussians | 1.19 | 0.125 | 0.196 | 0.860 | 0.73 | 0.121 | 0.196 | 0.397 |
+| 32 | cards | 1.02 | 0.154 | 0.124 | 0.726 | 0.46 | 0.155 | 0.120 | 0.172 |
+| 32 | 16k Gaussians | 1.17 | 0.173 | 0.195 | 0.781 | 0.78 | 0.174 | 0.196 | 0.393 |
+| 32 | 32k Gaussians | 1.79 | 0.241 | 0.305 | 1.227 | 1.33 | 0.243 | 0.307 | 0.760 |
 
 Drawing dominates up close, and there a card costs about what the
 16k body's Gaussians do: most of a tile is transparent, and each of its
 fragments still samples the atlas. Against the 32k body, 32 card figures
-take 0.98 ms against 1.74 close and 0.40 against 1.27 at crowd distance.
-At crowd distance cards draw in about half the 16k body's time and a
-fifth of the 32k's, and sort in about half and a third, as there are
-fewer of them. A card costs about twice a Gaussian to project (four
-corners, and twice the record).
+take 1.02 ms against 1.79 close and 0.46 against 1.33 at crowd distance.
+At crowd distance cards draw in under half the 16k body's time and a
+quarter of the 32k's, and sort in about three fifths and two fifths, as
+there are fewer of them. A card costs about twice a Gaussian to project
+(four corners, and twice the record). One figure filling the frame
+(`examples/splat_capture`'s front view from 2.2 m) takes 0.39 ms as 16k
+Gaussians, 0.48 as 32k and 0.52 as cards.
 
 **Against a skinned mesh.** The same crowd with villager 381 as a
 triangle mesh, his scaffold, the mesh his splats were fitted to. Two versions:
@@ -523,6 +533,12 @@ says so (`refused_casters`). Splat figures receive shadows only when lit.
   - alpha under 1/255 is dropped.
 
   A different falloff loses the trained paint, so this is not a setting.
+  The quad drawn is cut, its uv with it, to where the Gaussian's opacity
+  times the falloff can still reach 1/255: A ≤ −ln(e^−4 + (1 − e^−4) /
+  (255 · opacity)) / 4, plus 1/256 of margin. It rasterises only fragments
+  that can draw, and occlusion culling and the view's bounds test the cut
+  quad. Villager 381's Gaussians keep 91% of their quads' area on average,
+  most of them nearly opaque.
 - **Order.** A view's splat instances take their places among the blended
   draws (blended parts and sprites) by the distance to their bounds' centre.
   Instances that follow one another there are one **run**. A run's Gaussians
@@ -608,8 +624,8 @@ binding's.
   reduces its depth after its opaque pass (the world and the figures'
   [cores](#the-core)) to a farthest-depth pyramid, timed as
   `splats-occlusion`, and a splat lying wholly behind it is dropped before
-  the sort. A Gaussian is tested at its centre's depth over its quad, a
-  card at its nearest corner's over its four corners. Every fragment of a
+  the sort. A Gaussian is tested at its centre's depth over its cut quad, a
+  card at its nearest corner's over its cut corners. Every fragment of a
   dropped splat would have failed the depth test, so the frame is the same
   to the pixel. A figure on a pixel grid is not tested: its layer is drawn
   whole.
