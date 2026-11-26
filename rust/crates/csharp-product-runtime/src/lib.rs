@@ -995,13 +995,21 @@ impl CsharpProductRuntime {
             Some(_) => audio_output::AudioOutput::open(config.audio_output)?,
             None => None,
         };
-        let render_outputs = render_output::OutputExecutor::start(config.renderer_options)
-            .map_err(|error| {
-                CsharpProductRuntimeError::new(
-                    "CSHARP_RENDER_OUTPUT",
-                    format!("could not start the render output worker: {error}"),
-                )
-            })?;
+        // Image captures draw on the device the runtime draws with: a second
+        // device beside it could be made while it names objects (`render_output`).
+        let drawing_gpu = frame_output
+            .as_ref()
+            .map(|frames| frames.driver().gpu().clone())
+            .or_else(|| config.window_gpu.clone());
+        let render_outputs =
+            render_output::OutputExecutor::start(config.renderer_options, drawing_gpu).map_err(
+                |error| {
+                    CsharpProductRuntimeError::new(
+                        "CSHARP_RENDER_OUTPUT",
+                        format!("could not start the render output worker: {error}"),
+                    )
+                },
+            )?;
         let lifecycle = RuntimeLifecycle::new(config.runtime_instance_id, config.lifecycle);
         let initial_binding = input_binding(&lifecycle);
         let input_context = standard_input_context().as_str().as_bytes().to_vec();
