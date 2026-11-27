@@ -117,6 +117,8 @@ fn run() -> Result<ExitCode, String> {
         CommandName::Update(options) => update(&options),
         CommandName::Status(options) => status(&options),
         CommandName::PackContent(options) => pack_content(&options),
+        CommandName::InspectContent(path) => inspect_content(&path),
+        CommandName::UnpackContent { container, output } => unpack_content(&container, &output),
         CommandName::AssetCheck(path) => asset_check(&path),
     }
 }
@@ -656,6 +658,11 @@ enum CommandName {
     Update(UpdateOptions),
     Status(StatusOptions),
     PackContent(PackContentOptions),
+    InspectContent(PathBuf),
+    UnpackContent {
+        container: PathBuf,
+        output: PathBuf,
+    },
     AssetCheck(PathBuf),
 }
 
@@ -878,6 +885,24 @@ impl Arguments {
             "pack-content" => match help(pack_content_usage) {
                 Some(help) => return Ok(help),
                 None => CommandName::PackContent(parse_pack_content(rest)?),
+            },
+            "inspect-content" => match help(inspect_content_usage) {
+                Some(help) => return Ok(help),
+                None => match rest.as_slice() {
+                    [path] if !path.starts_with('-') => {
+                        CommandName::InspectContent(PathBuf::from(path))
+                    }
+                    _ => {
+                        return Err(format!(
+                            "RUSTY_ARGUMENT: rusty inspect-content needs one container file\n\n{}",
+                            inspect_content_usage()
+                        ))
+                    }
+                },
+            },
+            "unpack-content" => match help(unpack_content_usage) {
+                Some(help) => return Ok(help),
+                None => parse_unpack_content(rest)?,
             },
             other => {
                 return Err(format!(
@@ -1179,6 +1204,32 @@ fn parse_pack_content(values: Vec<String>) -> Result<PackContentOptions, String>
     })
 }
 
+fn parse_unpack_content(values: Vec<String>) -> Result<CommandName, String> {
+    let mut values = values.into_iter();
+    let mut container = None;
+    let mut output = None;
+    while let Some(value) = values.next() {
+        match value.as_str() {
+            "--output" => output = Some(PathBuf::from(required_value(&mut values, "--output")?)),
+            _ if !value.starts_with('-') && container.is_none() => {
+                container = Some(PathBuf::from(value))
+            }
+            _ => {
+                return Err(unknown_argument(
+                    "unpack-content",
+                    &value,
+                    unpack_content_usage,
+                ))
+            }
+        }
+    }
+    Ok(CommandName::UnpackContent {
+        container: container
+            .ok_or("RUSTY_ARGUMENT: rusty unpack-content needs a container file")?,
+        output: output.ok_or("RUSTY_ARGUMENT: rusty unpack-content needs --output <directory>")?,
+    })
+}
+
 fn parse_install(values: Vec<String>) -> Result<InstallOptions, String> {
     let mut values = values.into_iter();
     let mut options = InstallOptions {
@@ -1285,6 +1336,10 @@ commands:
   dev keep      keep a session from stopping when idle (`<id|port>`, `--off` to undo)
   dev prune     clear the records of sessions that ended without cleaning up
   pack-content  pack one content directory into a container a product opens at run time
+  inspect-content
+                print a container's content identity and entries as JSON
+  unpack-content
+                write a container's files, uncompressed, into a new directory
   asset check   check a GLB against the Engine's admission, as JSON, without changing it
                 (exit 0 admitted, 1 refused, 2 unreadable)
 
@@ -1495,6 +1550,37 @@ Example:
         .to_owned()
 }
 
+fn inspect_content_usage() -> String {
+    "usage: rusty inspect-content <file.rpak>
+
+Prints one JSON object describing a content container, reading only its header and inventory:
+
+  {\"path\": \"<file.rpak>\", \"identity\": \"<64 hex digits>\",
+   \"entries\": [{\"path\", \"byteLength\", \"sha256\"}, ...]}
+
+identity is the identity `Content.OpenContainer(path)` reports for it (ProductContentBundle.Identity
+as hex), built from the SHA-256 the inventory records for each file. Entries are in path order;
+byteLength and sha256 describe each file uncompressed. A container is read by the pair that wrote
+it: run the pinned pair's `runtime-pack/bin/rusty` (under the cache `rusty status` shows).
+
+Example:
+  rusty inspect-content library/srd-ruleset.rpak"
+        .to_owned()
+}
+
+fn unpack_content_usage() -> String {
+    "usage: rusty unpack-content <file.rpak> --output <directory>
+
+Writes every file of a content container, uncompressed, at its relative path in a new directory:
+the directory `rusty pack-content` packs back into a container of the same identity. The directory
+appears at <directory> by rename once complete; an existing <directory> is refused, as is an entry
+whose path is not relative and normalized. Run the pinned pair's `rusty`, as for inspect-content.
+
+Example:
+  rusty unpack-content library/srd-ruleset.rpak --output build/modules/srd-ruleset"
+        .to_owned()
+}
+
 fn asset_usage() -> String {
     "usage: rusty asset check <file.glb>
 
@@ -1545,6 +1631,52 @@ fn pack_content(options: &PackContentOptions) -> Result<ExitCode, String> {
         report.entries,
         report.bytes,
         options.output.display()
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+fn inspect_content(path: &Path) -> Result<ExitCode, String> {
+    let report = product_container::Container::open(path)
+        .and_then(|container| content_inventory(&container))
+        .map_err(|error| format!("RUSTY_INSPECT_CONTENT: {error}"))?;
+    println!("{report}");
+    Ok(ExitCode::SUCCESS)
+}
+
+fn content_inventory(
+    container: &product_container::Container,
+) -> Result<Value, product_container::Error> {
+    let identity: String = container
+        .identity()?
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let entries: Vec<Value> = container
+        .entries()
+        .iter()
+        .map(|entry| {
+            serde_json::json!({
+                "path": entry.path,
+                "byteLength": entry.byte_length,
+                "sha256": entry.sha256,
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({
+        "path": container.path().display().to_string(),
+        "identity": identity,
+        "entries": entries,
+    }))
+}
+
+fn unpack_content(container: &Path, output: &Path) -> Result<ExitCode, String> {
+    let report = product_container::unpack_content(container, output)
+        .map_err(|error| format!("RUSTY_UNPACK_CONTENT: {error}"))?;
+    println!(
+        "Unpacked {} files ({} bytes) into {}",
+        report.entries,
+        report.bytes,
+        output.display()
     );
     Ok(ExitCode::SUCCESS)
 }
@@ -3305,6 +3437,48 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn inspect_content_reports_the_documented_identity_and_entries() {
+        use sha2::{Digest, Sha256};
+        let directory = tempfile::tempdir().unwrap();
+        let module = directory.path().join("module");
+        fs::create_dir_all(module.join("rules")).unwrap();
+        fs::write(module.join("module.json"), b"{}").unwrap();
+        fs::write(module.join("rules/classes.json"), vec![b' '; 4096]).unwrap();
+        let packed = directory.path().join("module.rpak");
+        product_container::pack_content(&module, &packed, true).unwrap();
+        let container = product_container::Container::open(&packed).unwrap();
+        let report = content_inventory(&container).unwrap();
+
+        // SHA-256 over each file's path, a zero byte and its digest, in path order.
+        let mut identity = Sha256::new();
+        let mut entries = Vec::new();
+        for path in ["module.json", "rules/classes.json"] {
+            let bytes = fs::read(module.join(path)).unwrap();
+            let digest = Sha256::digest(&bytes);
+            identity.update(path.as_bytes());
+            identity.update([0]);
+            identity.update(digest);
+            entries.push(serde_json::json!({
+                "path": path,
+                "byteLength": bytes.len(),
+                "sha256": format!("{digest:x}"),
+            }));
+        }
+        assert_eq!(report["identity"], format!("{:x}", identity.finalize()));
+        assert_eq!(report["entries"], Value::Array(entries));
+
+        let unpack = |arguments: &[&str]| {
+            parse_unpack_content(arguments.iter().map(|value| value.to_string()).collect())
+        };
+        assert!(matches!(
+            unpack(&["module.rpak", "--output", "out"]),
+            Ok(CommandName::UnpackContent { container, output })
+                if container == Path::new("module.rpak") && output == Path::new("out")
+        ));
+        assert!(unpack(&["module.rpak"]).unwrap_err().contains("--output"));
+    }
 
     #[test]
     fn the_top_level_help_names_every_command() {

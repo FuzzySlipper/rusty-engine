@@ -305,7 +305,10 @@ gets the services the test host has: no renderer, audio, input or product
 lifecycle. It has no build bundles, but it packs and opens
 [content containers](csharp-product-project.md#content-containers-installed-beside-the-product)
 with `ProductContentBundle.PackContainer(engine.Content, directory, output)` and
-`ProductContentBundle.OpenContainer(engine.Content, path)`.
+`ProductContentBundle.OpenContainer(engine.Content, path)`. A tool with no
+test host reads a container's identity, entries and files through `rusty
+inspect-content` and `rusty unpack-content`
+([reading a container without the Engine](csharp-product-project.md#reading-a-container-without-the-engine)).
 
 ## Update
 

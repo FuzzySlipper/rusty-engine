@@ -6,7 +6,10 @@ use std::{
 
 use serde::Deserialize;
 
-use crate::{join, write, Body, Bundle, Error, NewEntry, ProductSource, WriteReport};
+use crate::{
+    is_relative_path, join, write, Body, Bundle, Container, Error, NewEntry, ProductSource,
+    WriteReport,
+};
 
 /// The container's file name in a release directory.
 pub const CONTAINER_NAME: &str = "product.rpak";
@@ -167,6 +170,49 @@ pub fn pack_content(directory: &Path, out: &Path, compress: bool) -> Result<Writ
         })
         .collect();
     write(out, entries, Vec::new(), compress)
+}
+
+/// Writes every entry of the container at `container`, uncompressed, at its
+/// container-relative path in a new directory `out`: the directory
+/// [`pack_content`] packs back into a container of the same identity. The
+/// directory appears at `out` by rename once complete, so an existing `out`
+/// is refused. An entry path that is not relative and normalized is refused,
+/// since it would write outside `out`.
+pub fn unpack_content(container: &Path, out: &Path) -> Result<WriteReport, Error> {
+    let container = Container::open(container)?;
+    if fs::symlink_metadata(out).is_ok() {
+        return Err(Error::Exists(out.to_owned()));
+    }
+    let name = out
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| Error::InvalidPath(out.display().to_string()))?;
+    let pending = out.with_file_name(format!(".{name}.rusty-pending"));
+    let _ = fs::remove_dir_all(&pending);
+    let result = (|| {
+        fs::create_dir_all(&pending).map_err(Error::io(&pending))?;
+        let mut bytes = 0;
+        for entry in container.entries() {
+            if !is_relative_path(&entry.path) {
+                return Err(Error::InvalidPath(entry.path.clone()));
+            }
+            let target = pending.join(&entry.path);
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent).map_err(Error::io(parent))?;
+            }
+            fs::write(&target, container.read(entry)?).map_err(Error::io(&target))?;
+            bytes += entry.byte_length;
+        }
+        fs::rename(&pending, out).map_err(Error::io(out))?;
+        Ok(WriteReport {
+            bytes,
+            entries: container.entries().len(),
+        })
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&pending);
+    }
+    result
 }
 
 /// `path` made absolute with symlinks and `..` resolved, also when its
@@ -330,5 +376,74 @@ mod tests {
             let report = pack_product(&staged, &release, false).unwrap();
             assert_eq!(report.loose_files, ["coreclr/Game.dll"]);
         }
+    }
+
+    #[test]
+    fn unpacking_and_packing_again_keeps_the_files_and_the_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let module = directory.path().join("module");
+        fs::create_dir_all(module.join("rules/deep")).unwrap();
+        fs::write(module.join("module.json"), b"{}").unwrap();
+        fs::write(module.join("rules/deep/table.bin"), vec![3_u8; 50_000]).unwrap();
+        let files = ProductSource::open(&module).unwrap().files("").unwrap();
+        for compress in [false, true] {
+            let packed = directory.path().join(format!("packed-{compress}.rpak"));
+            pack_content(&module, &packed, compress).unwrap();
+            let out = directory.path().join(format!("out-{compress}/module"));
+            let report = unpack_content(&packed, &out).unwrap();
+            assert_eq!((report.entries, report.bytes), (2, 50_002));
+            let unpacked = ProductSource::open(&out).unwrap();
+            assert_eq!(unpacked.files("").unwrap(), files);
+            for path in &files {
+                assert_eq!(
+                    fs::read(out.join(path)).unwrap(),
+                    fs::read(module.join(path)).unwrap()
+                );
+            }
+            let again = directory.path().join(format!("again-{compress}.rpak"));
+            pack_content(&out, &again, compress).unwrap();
+            assert_eq!(
+                Container::open(&again).unwrap().identity().unwrap(),
+                Container::open(&packed).unwrap().identity().unwrap()
+            );
+
+            // An existing output is refused and left as it was.
+            assert!(matches!(
+                unpack_content(&packed, &out),
+                Err(Error::Exists(_))
+            ));
+            assert_eq!(unpacked.files("").unwrap(), files);
+            let parent = out.parent().unwrap();
+            assert_eq!(fs::read_dir(parent).unwrap().count(), 1);
+        }
+    }
+
+    #[test]
+    fn an_entry_path_outside_the_output_is_refused_and_nothing_is_left() {
+        let directory = tempfile::tempdir().unwrap();
+        let packed = directory.path().join("escape.rpak");
+        let entry = |path: &str| NewEntry {
+            path: path.to_owned(),
+            bundle: None,
+            body: Body::Bytes(b"x"),
+        };
+        write(
+            &packed,
+            vec![entry("a.txt"), entry("b/../../escape.txt")],
+            Vec::new(),
+            false,
+        )
+        .unwrap();
+        let out = directory.path().join("out");
+        assert!(matches!(
+            unpack_content(&packed, &out),
+            Err(Error::InvalidPath(path)) if path == "b/../../escape.txt"
+        ));
+        let mut left: Vec<_> = fs::read_dir(directory.path())
+            .unwrap()
+            .map(|item| item.unwrap().file_name())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["escape.rpak"]);
     }
 }

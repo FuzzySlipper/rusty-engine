@@ -485,6 +485,46 @@ identities. A product's own tool packs and opens containers the same way, throug
 `ProductContentBundle.PackContainer` and `OpenContainer(host.Engine.Content, …)` inside an
 `EngineTestHost` call (see [tools](csharp-sdk.md#tools)).
 
+### Reading a container without the Engine
+
+A tool or build step with no Engine host reads a container through the
+`rusty` CLI:
+
+```bash
+rusty inspect-content library/srd-ruleset.rpak
+rusty unpack-content library/srd-ruleset.rpak --output build/modules/srd-ruleset
+```
+
+`inspect-content` reads only the header and inventory and prints one JSON
+object, `{"path", "identity", "entries": [{"path", "byteLength", "sha256"}]}`,
+whose `identity` is `Identity` as 64 hex digits. `unpack-content` writes
+every file, uncompressed, at its relative path in a new directory, which
+`pack-content` packs back into a container of the same identity. The
+directory appears by rename once complete; an existing directory is refused
+with `PRODUCT_UNPACK_EXISTS`, and an entry whose path is not relative and
+normalized with `PRODUCT_SOURCE_PATH`. A build that ships loose files (a
+browser build, say) unpacks at build time.
+
+The format, as the pair that wrote a container reads it:
+
+- a 32-byte header: the magic `RUSTYPAK`, then the inventory's offset, the
+  inventory's length and the file's length, each a little-endian `u64`;
+- each file's stored bytes at a 64-byte-aligned offset, in path order;
+- the inventory, JSON:
+  `{"entries": [{"path", "byteLength", "sha256", "offset", "bundle"?, "zstdLength"?}], "bundles": [{"id", "root"}]}`.
+  `byteLength` and `sha256` (hex) describe the file uncompressed. A file
+  written with compression that zstd shrinks by at least a tenth is stored
+  as one zstd frame of `zstdLength` bytes; any other is stored raw;
+- the identity is not stored: it is SHA-256 over each entry's UTF-8 path, a
+  zero byte and its 32-byte SHA-256, in path order, built from the
+  inventory's values without hashing the files.
+
+The format carries no version beyond the magic and has no stability
+guarantee: a pair reads its own output, and tools run the pinned pair's
+`rusty` (`runtime-pack/bin/rusty` under the cache `rusty status` shows). A
+product that reads containers with code of its own follows this description
+and keeps up with it.
+
 ### Setup steps: choosing a folder and running a tool
 
 A product that needs a one-time setup step, such as converting the player's

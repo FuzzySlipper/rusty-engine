@@ -8,7 +8,8 @@
 //! file that zstd shrinks enough compressed instead (its stored length is the
 //! entry's `zstdLength`); reading it decompresses it. Integrity is the
 //! inventory's SHA-256 values: there is no second checksum and, since a pair
-//! reads only its own output, no version field beyond the magic.
+//! reads only its own output, no version field beyond the magic. A
+//! container's identity is [`collection_identity`] over those values.
 //!
 //! Native code (CoreCLR assemblies, the NativeAOT module) stays loose beside
 //! the container: hostfxr and the dynamic loader take file paths.
@@ -20,9 +21,10 @@ mod source;
 
 pub use bytes::{ContentBytes, WeakContentBytes};
 pub use container::{write, Body, Bundle, Container, Entry, NewEntry, WriteReport};
-pub use pack::{pack_content, pack_product, PackReport, CONTAINER_NAME};
+pub use pack::{pack_content, pack_product, unpack_content, PackReport, CONTAINER_NAME};
 pub use source::ProductSource;
 
+use sha2::{Digest, Sha256};
 use std::{fmt, io, path::PathBuf};
 
 /// Why a container or a Product file could not be read or written.
@@ -56,6 +58,8 @@ pub enum Error {
         staged: PathBuf,
         release: PathBuf,
     },
+    /// An unpack's output directory already exists.
+    Exists(PathBuf),
 }
 
 impl Error {
@@ -69,6 +73,7 @@ impl Error {
             Self::NotRegular(_) => "PRODUCT_SOURCE_NOT_REGULAR",
             Self::InvalidPath(_) => "PRODUCT_SOURCE_PATH",
             Self::Overlap { .. } => "PRODUCT_PACK_OVERLAP",
+            Self::Exists(_) => "PRODUCT_UNPACK_EXISTS",
         }
     }
 
@@ -109,6 +114,11 @@ impl fmt::Display for Error {
                 release.display(),
                 staged.display()
             ),
+            Self::Exists(path) => write!(
+                f,
+                "`{}` already exists; unpack into a new directory",
+                path.display()
+            ),
             Self::InvalidPath(path) => write!(
                 f,
                 "`{path}` must be a relative, `/`-separated, normalized path"
@@ -135,4 +145,28 @@ pub fn join(prefix: &str, path: &str) -> String {
     } else {
         format!("{prefix}/{path}")
     }
+}
+
+/// A content collection's identity: SHA-256 over each file's path, a zero
+/// byte and its 32-byte SHA-256, in path order. It follows the files and not
+/// how they are stored, so a container and the directory it was packed from
+/// (or unpacked to) have the same identity.
+pub fn collection_identity(mut files: Vec<(&str, [u8; 32])>) -> [u8; 32] {
+    files.sort_unstable();
+    let mut hasher = Sha256::new();
+    for (path, digest) in files {
+        hasher.update(path.as_bytes());
+        hasher.update([0]);
+        hasher.update(digest);
+    }
+    hasher.finalize().into()
+}
+
+/// The 32 bytes of a 64-digit hex SHA-256, as an inventory records it.
+pub fn hex_digest(hex: &str) -> Option<[u8; 32]> {
+    let mut digest = [0_u8; 32];
+    for (index, byte) in digest.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(hex.get(index * 2..index * 2 + 2)?, 16).ok()?;
+    }
+    Some(digest)
 }

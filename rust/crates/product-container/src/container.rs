@@ -10,7 +10,7 @@ use memmap2::Mmap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{ContentBytes, Error};
+use crate::{collection_identity, hex_digest, ContentBytes, Error};
 
 const MAGIC: [u8; 8] = *b"RUSTYPAK";
 const HEADER_LEN: u64 = 32;
@@ -142,6 +142,23 @@ impl Container {
         &self.entries
     }
 
+    /// The container's content identity: [`collection_identity`] over each
+    /// entry's path and the SHA-256 its inventory records.
+    pub fn identity(&self) -> Result<[u8; 32], Error> {
+        let files = self
+            .entries
+            .iter()
+            .map(|entry| {
+                let digest = hex_digest(&entry.sha256).ok_or_else(|| Error::Corrupt {
+                    path: self.path.clone(),
+                    detail: format!("entry `{}` has an invalid SHA-256", entry.path),
+                })?;
+                Ok((entry.path.as_str(), digest))
+            })
+            .collect::<Result<_, Error>>()?;
+        Ok(collection_identity(files))
+    }
+
     pub fn bundles(&self) -> &[Bundle] {
         &self.bundles
     }
@@ -250,6 +267,7 @@ pub struct NewEntry<'a> {
     pub body: Body<'a>,
 }
 
+/// What a write or an unpack produced: the bytes it wrote and its entries.
 #[derive(Debug, Clone, Copy)]
 pub struct WriteReport {
     pub bytes: u64,
@@ -535,6 +553,9 @@ mod tests {
             container.get("content/rules/a.json").unwrap().as_ref(),
             b"{\"id\":1}"
         );
+        // The identity is built from the recorded SHA-256 values, so only it
+        // needs them to be digests.
+        assert!(matches!(container.identity(), Err(Error::Corrupt { .. })));
     }
 
     #[test]

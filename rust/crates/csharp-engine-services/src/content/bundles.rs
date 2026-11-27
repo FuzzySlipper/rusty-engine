@@ -3,7 +3,7 @@
 //! used, keeping no copy of it; references hold the bytes they read.
 use super::*;
 use crate::composition::CsharpEngineServicesError;
-use product_container::{join, Container, ProductSource};
+use product_container::{collection_identity, hex_digest, join, Container, ProductSource};
 use serde::Deserialize;
 use std::path::Path;
 
@@ -129,12 +129,12 @@ impl ProductContentBundles {
                         Ok((format!("{prefix}{}", file.path), inventoried))
                     })
                     .collect::<Result<BTreeMap<_, _>, String>>()?;
-                let identity = collection_identity(
+                let identity = sha256_words(&collection_identity(
                     files
                         .iter()
                         .map(|(path, file)| (&path[prefix.len()..], file.digest))
                         .collect(),
-                );
+                ));
                 Ok(AdmittedBundle {
                     id: bundle.id,
                     root: bundle.root,
@@ -326,14 +326,9 @@ struct OpenBundle {
 }
 
 impl OpenBundle {
-    fn container(container: Container) -> Option<Self> {
-        let identities = container
-            .entries()
-            .iter()
-            .map(|entry| Some((entry.path.as_str(), hex_digest(&entry.sha256)?)))
-            .collect::<Option<Vec<_>>>()?;
-        Some(Self {
-            identity: collection_identity(identities),
+    fn container(container: Container) -> Result<Self, product_container::Error> {
+        Ok(Self {
+            identity: sha256_words(&container.identity()?),
             files: Arc::new(BundleFiles::new(Store::Container(Arc::new(container)))),
         })
     }
@@ -379,19 +374,6 @@ impl OpenBundle {
             _ => Ok(None),
         }
     }
-}
-
-/// A collection's identity: SHA-256 over each file's path and SHA-256 digest
-/// in path order, so it follows the files and not how they are stored.
-fn collection_identity(mut files: Vec<(&str, [u8; 32])>) -> NativeContentSha256 {
-    files.sort_unstable();
-    let mut hasher = Sha256::new();
-    for (path, digest) in files {
-        hasher.update(path.as_bytes());
-        hasher.update([0]);
-        hasher.update(digest);
-    }
-    sha256_words(&hasher.finalize())
 }
 
 #[derive(Default)]
@@ -505,15 +487,8 @@ pub(super) unsafe extern "C" fn open_container(
         None => Path::new(path).to_owned(),
     };
     let bundle = Container::open(&path)
-        .map_err(|failure| container_error(&failure))
-        .and_then(|container| {
-            OpenBundle::container(container).ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "PRODUCT_CONTAINER_CORRUPT",
-                    format!("`{}`: an entry has an invalid SHA-256", path.display()),
-                )
-            })
-        });
+        .and_then(OpenBundle::container)
+        .map_err(|failure| container_error(&failure));
     let bundle = match bundle {
         Ok(bundle) => bundle,
         Err(refusal) => return refuse(&refusal, error),
@@ -642,15 +617,6 @@ pub(super) unsafe extern "C" fn open_bundle_reference(
 /// message naming the file.
 fn container_error(failure: &product_container::Error) -> CsharpEngineServicesError {
     CsharpEngineServicesError::new(failure.code(), failure.to_string())
-}
-
-/// The 32 bytes of a validated 64-digit hex SHA-256.
-fn hex_digest(hex: &str) -> Option<[u8; 32]> {
-    let mut digest = [0_u8; 32];
-    for (index, byte) in digest.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(hex.get(index * 2..index * 2 + 2)?, 16).ok()?;
-    }
-    Some(digest)
 }
 
 #[cfg(test)]
