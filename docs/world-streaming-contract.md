@@ -126,9 +126,13 @@ bounded pieces before scheduling it. ApplyResidency blocks until it returns; it
 rebuilds only the changed chunks, unless the transaction is deferred (below).
 
 A job uses **copied, product-owned values only**, without Engine services,
-mutable product authority or `EntityStore` access. Tag a result with the chunk
-revision or request it answers and discard it when stale. Do not block a
-callback waiting on a job. Content/persistence service calls still belong on
+mutable product authority or `EntityStore` access. A keyed random draw is not
+an Engine call: `KeyedRng.Draw` computes in managed code what
+`Random.DrawKeyed` returns for the same seed, scope, key and range, so a job
+or sampler draws where it decides
+([`Random`](csharp-capabilities.md#generated-engine-services)). Tag a result
+with the chunk revision or request it answers and discard it when stale. Do not
+block a callback waiting on a job. Content/persistence service calls still belong on
 the callback lane. Reading `ProductContent`'s admitted snapshot is not an
 Engine call, but every read from a `ProductContentBundle` (an opened container
 or build bundle) is. A lazy or cached read that a job may be the first to touch

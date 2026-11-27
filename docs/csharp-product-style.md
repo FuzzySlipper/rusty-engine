@@ -85,9 +85,11 @@ boundary is crossed.
 ## Use Engine facts; keep product meaning in C#
 
 Use Engine-provided lifecycle/update facts, input, and random services for
-gameplay behavior. Do not build a second central loop, poll browser state, use
-wall-clock time for gameplay, or introduce unmanaged timers/threads simply to
-advance product state.
+gameplay behavior. A worker or job that needs a keyed draw calls the SDK's
+`KeyedRng`, which draws what `Random.DrawKeyed` draws, on any thread. Do not
+build a second central loop, poll browser state, use wall-clock time for
+gameplay, or introduce unmanaged timers/threads simply to advance product
+state.
 
 Keep no retained native pointers or borrowed callback data in product state.
 Follow disposable handle ownership from the generated SDK. Ordinary
