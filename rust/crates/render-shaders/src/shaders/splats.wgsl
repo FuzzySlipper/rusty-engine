@@ -150,6 +150,9 @@ fn cs_project(@builtin(global_invocation_id) id: vec3<u32>) {
     let fade = project.tint.w;
     if fade < 0.9999 {
         color.a = color.a * max(fade, 0.0);
+    } else if fade > 1.0001 {
+        // Close up: thin Gaussians thicken, so the splats cover a base mesh.
+        color.a = 1.0 - pow(1.0 - min(color.a, 1.0), fade);
     }
     if color.a < ALPHA_MIN {
         cull(slot);

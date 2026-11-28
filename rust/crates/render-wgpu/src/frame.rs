@@ -2578,7 +2578,7 @@ impl Renderer {
         let mut runs: Vec<Vec<usize>> = Vec::new();
         let mut run_gaussians = 0u32;
         let mut run_gridded = false;
-        let mut run_light: Option<f32> = None;
+        let mut run_light: Option<(f32, f32)> = None;
         let mut run_cards: Option<u32> = None;
         let mut refused = 0u32;
         let (mut part, mut sprite, mut splat) = (0, 0, 0);

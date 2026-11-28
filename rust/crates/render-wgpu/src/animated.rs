@@ -1791,19 +1791,34 @@ impl Renderer {
                 continue;
             }
             let depth_sq = ((bounds.min + bounds.max) * 0.5).distance_squared(eye);
+            // One distance curve: the splats prominent close up (opacity
+            // boosted, weight above 1), their own through the middle, fading
+            // out over the base mesh far off (weight below 1).
             if apply_fade {
-                if let Some(a) = appearance.filter(|a| a.fade_far > a.fade_near) {
+                if let Some(a) = appearance {
                     let dist = depth_sq.sqrt();
-                    if dist >= a.fade_far {
-                        continue;
-                    }
-                    let weight = if dist <= a.fade_near {
-                        1.0
-                    } else {
-                        let u = (dist - a.fade_near) / (a.fade_far - a.fade_near);
-                        1.0 - u * u * (3.0 - 2.0 * u)
+                    let smooth = |u: f32| {
+                        let u = u.clamp(0.0, 1.0);
+                        u * u * (3.0 - 2.0 * u)
                     };
-                    if weight < 1.0 {
+                    let mut weight = 1.0;
+                    if a.fade_far > a.fade_near && dist > a.fade_near {
+                        if dist >= a.fade_far {
+                            continue;
+                        }
+                        weight = 1.0 - smooth((dist - a.fade_near) / (a.fade_far - a.fade_near));
+                    } else if a.close_far > a.close_near && dist < a.close_far {
+                        let near = 1.0 - smooth((dist - a.close_near) / (a.close_far - a.close_near));
+                        if a.close_boost > 1.0 {
+                            weight = 1.0 + (a.close_boost - 1.0) * near;
+                        }
+                        if a.close_bias > 0.0 {
+                            for draw in &mut sets {
+                                draw.surface_bias += (a.close_bias - draw.surface_bias) * near;
+                            }
+                        }
+                    }
+                    if weight != 1.0 {
                         for draw in &mut sets {
                             draw.fade_weight = weight;
                         }
@@ -1826,7 +1841,7 @@ impl Renderer {
                 .map(|_| instance.slot);
             let light = appearance
                 .filter(|appearance| appearance.lighting == render_model::SplatLighting::Lit)
-                .map(|appearance| appearance.light_floor);
+                .map(|appearance| (appearance.light_floor, appearance.shadow_offset));
             let casts = match &node.kind {
                 NodeKind::AnimatedMesh(descriptor) => descriptor.shadow_casting.is_cast(),
                 _ => false,

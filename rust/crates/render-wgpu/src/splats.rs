@@ -305,8 +305,9 @@ pub(crate) struct SplatInstance {
     /// Its pixel grid: it draws in a run of its own.
     pub grid: Option<SplatGrid>,
     /// Lit by the world's lights (`SplatAppearance::lighting`), with its
-    /// light floor: it draws in runs of lit instances with that floor.
-    pub light: Option<f32>,
+    /// light floor and shadow offset: it draws in runs of lit instances
+    /// with both the same.
+    pub light: Option<(f32, f32)>,
     /// How it casts into shadow layers, when it casts.
     pub caster: Option<render_model::SplatShadowCaster>,
     /// For cards, its asset's slot: it draws in runs of that asset's
@@ -344,8 +345,8 @@ pub(crate) struct SplatRun<'a> {
     pub read_after: bool,
     /// Its one instance's pixel grid, with the instance's world bounds.
     pub grid: Option<(&'a SplatGrid, Aabb)>,
-    /// Lit, with its instances' light floor.
-    pub light: Option<f32>,
+    /// Lit, with its instances' light floor and shadow offset.
+    pub light: Option<(f32, f32)>,
 }
 
 /// How a run's layer is composited.
@@ -1564,7 +1565,8 @@ impl Splats {
                 bytes.extend_from_slice(&value.to_le_bytes());
             }
             let normal_target = if finish.lit() { 1.0 } else { 0.0 };
-            for value in [cutoff, run.light.unwrap_or(0.0), normal_target, 0.0] {
+            let (floor, shadow_offset) = run.light.unwrap_or((0.0, 0.0));
+            for value in [cutoff, floor, normal_target, shadow_offset] {
                 bytes.extend_from_slice(&value.to_le_bytes());
             }
             let viewport = target.viewport;

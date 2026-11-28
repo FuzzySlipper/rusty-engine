@@ -1584,6 +1584,28 @@ pub struct SplatAppearance {
     /// metal. Off: occlusion 1, roughness 1, not metal.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub material: bool,
+    /// Splat prominence close up (#11211 experiment): within `close_near`
+    /// metres each Gaussian's opacity a becomes 1 - (1 - a)^`close_boost`,
+    /// easing back to its own by `close_far`, so near a co-located base
+    /// mesh the splats cover it wholly and carry the detail. A boost of 1 or
+    /// less is off.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub close_boost: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub close_near: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub close_far: f32,
+    /// The surface bias within `close_near`, eased to `surface_bias` by
+    /// `close_far` (0 keeps `surface_bias`): close up the splats draw over
+    /// their own base mesh, which only fills what they leave open.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub close_bias: f32,
+    /// A lit figure's shadow lookups stand this many metres out along its
+    /// splats' normal (#11211 experiment), so a base mesh's small features
+    /// (nose, lips) don't stamp shadows on the painted surface while large
+    /// ones (a hood, an arm) still shade it.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub shadow_offset: f32,
 }
 
 /// The most Gaussian groups one splat instance tints at once.
@@ -1694,6 +1716,11 @@ impl Default for SplatAppearance {
             fade_far: 0.0,
             surface_bias: 0.0,
             material: false,
+            close_boost: 0.0,
+            close_near: 0.0,
+            close_far: 0.0,
+            close_bias: 0.0,
+            shadow_offset: 0.0,
         }
     }
 }
@@ -1751,6 +1778,15 @@ impl SplatAppearance {
         }
         if !(self.surface_bias.is_finite() && self.surface_bias >= 0.0) {
             return Some("a splat surface bias is finite and not negative");
+        }
+        if self.close_boost > 1.0
+            && !(self.close_boost.is_finite()
+                && self.close_near.is_finite()
+                && self.close_far.is_finite()
+                && self.close_near >= 0.0
+                && self.close_far > self.close_near)
+        {
+            return Some("a splat close boost takes finite near and far metres, far above near");
         }
         None
     }

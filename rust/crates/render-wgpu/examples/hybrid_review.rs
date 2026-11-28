@@ -9,6 +9,7 @@
 //!     [--frames N --fps F --from T] [--views NAME:AROUND:PITCH:DIST:AIM,...]
 //!     [--lit FLOOR] [--caster none|splats|ellipsoids|core]
 //!     [--mesh-casts on|off] [--fade NEAR,FAR] [--bias METRES] [--pixel N] [--fov DEG] [--material]
+//!     [--close BOOST,NEAR,FAR] [--close-bias METRES] [--shadow-offset METRES] [--dolly DIST0,DIST1,AIM0,AIM1]
 //! ```
 //!
 //! - Views look at the pelvis (plus AIM metres up) from DIST metres,
@@ -54,6 +55,10 @@ struct Arguments {
     pixel: u32,
     fov: f64,
     material: bool,
+    close: [f32; 3],
+    close_bias: f32,
+    shadow_offset: f32,
+    dolly: Option<[f64; 4]>,
 }
 
 fn parse_views(text: &str) -> Result<Vec<View>, String> {
@@ -96,6 +101,10 @@ fn arguments() -> Result<Arguments, String> {
         pixel: 0,
         fov: 40.0,
         material: false,
+        close: [0.0; 3],
+        close_bias: 0.0,
+        shadow_offset: 0.0,
+        dolly: None,
     };
     let (mut frames, mut fps, mut from) = (None::<u32>, 30.0, 0.0);
     let mut args = std::env::args().skip(1);
@@ -152,6 +161,16 @@ fn arguments() -> Result<Arguments, String> {
             "--pixel" => a.pixel = value()?.parse().map_err(|_| "--pixel")?,
             "--fov" => a.fov = value()?.parse().map_err(|_| "--fov")?,
             "--material" => a.material = true,
+            "--close-bias" => a.close_bias = value()?.parse().map_err(|_| "--close-bias")?,
+            "--shadow-offset" => a.shadow_offset = value()?.parse().map_err(|_| "--shadow-offset")?,
+            "--close" => {
+                let v: Vec<f32> = value()?.split(',').map(|x| x.parse().map_err(|_| "--close")).collect::<Result<_, _>>()?;
+                a.close = [v[0], v[1], v[2]];
+            }
+            "--dolly" => {
+                let v: Vec<f64> = value()?.split(',').map(|x| x.parse().map_err(|_| "--dolly")).collect::<Result<_, _>>()?;
+                a.dolly = Some([v[0], v[1], v[2], v[3]]);
+            }
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -387,6 +406,11 @@ fn main() {
                     fade_far: a.fade[1],
                     surface_bias: a.bias,
                     material: a.material,
+                    close_boost: a.close[0],
+                    close_near: a.close[1],
+                    close_far: a.close[2],
+                    close_bias: a.close_bias,
+                    shadow_offset: a.shadow_offset,
                     ..SplatAppearance::default()
                 },
                 splat_groups: Vec::new(),
@@ -483,7 +507,16 @@ fn main() {
         if frame == 0 {
             eprintln!("pelvis at {centre:?}");
         }
+        // A dolly moves every view from one distance and aim to another over
+        // the frames, eased.
+        let along = if a.times.len() > 1 { frame as f64 / (a.times.len() - 1) as f64 } else { 0.0 };
+        let eased = along * along * (3.0 - 2.0 * along);
         for view in &a.views {
+            let (distance, aim) = match a.dolly {
+                Some([d0, d1, a0, a1]) => (d0 + (d1 - d0) * eased, a0 + (a1 - a0) * eased),
+                None => (view.distance, view.aim),
+            };
+            let view = View { name: view.name.clone(), distance, aim, ..*view };
             let target = [centre[0], centre[1] + view.aim, centre[2]];
             let (around, tilt) = (view.around.to_radians(), view.pitch.to_radians());
             let position = [

@@ -36,7 +36,8 @@ fn world_normal(view: vec3<f32>) -> vec3<f32> {
 // `color` (linear, the baked colour as albedo) lit at `position` facing
 // `normal`, kept at least the floor's share of itself.
 fn lit(color: vec3<f32>, normal: vec3<f32>, position: vec3<f32>, material: vec3<f32>) -> vec3<f32> {
-    let radiance = standard_radiance(color, normal, position, material.y, material.z, material.x);
+    // The shadow offset (`cutoff.w`) stands the lookup out along the normal.
+    let radiance = standard_radiance(color, normal, position + normal * grid.cutoff.w, material.y, material.z, material.x);
     return max(radiance, color * grid.cutoff.y);
 }
 
