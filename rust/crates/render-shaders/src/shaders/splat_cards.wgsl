@@ -228,7 +228,7 @@ fn card_colour(in: CardVarying) -> vec4<f32> {
     var alpha = min(0.99, texel.a);
     let fade = in.multiplier.w;
     if fade < 0.9999 {
-        alpha = 1.0 - pow(1.0 - alpha, max(fade, 0.0));
+        alpha = alpha * max(fade, 0.0);
     }
     if alpha < ALPHA_MIN {
         discard;

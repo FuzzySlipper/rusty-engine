@@ -139,12 +139,13 @@ fn cs_project(@builtin(global_invocation_id) id: vec3<u32>) {
     let gaussian = gaussians[index];
     var centre = bitcast<vec3<f32>>(gaussian.centre_color.xyz);
     var color = unpack4x8unorm(gaussian.centre_color.w);
-    // Distance fade over a synchronized base mesh: Beer-Lambert optical-depth
-    // scaling (1 - (1 - a)^w) fades stacked Gaussians evenly regardless of
-    // local overdraw and lets `alpha_reach` shrink quads as fade falls.
+    // Distance fade over a synchronized base mesh: linear alpha scaling with
+    // smoothstep fade keeps the transition perceptually smooth all the way to
+    // fade_far (no step right before CPU skip), shrinks `alpha_reach` quads
+    // aggressively across the blend band, and culls faint Gaussians early.
     let fade = project.tint.w;
     if fade < 0.9999 {
-        color.a = 1.0 - pow(1.0 - min(color.a, 0.99), max(fade, 0.0));
+        color.a = color.a * max(fade, 0.0);
     }
     if color.a < ALPHA_MIN {
         cull(slot);
