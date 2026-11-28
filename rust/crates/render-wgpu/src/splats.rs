@@ -87,7 +87,7 @@ const STREAM_BYTES: u64 = 16;
 /// The most joints a skinned set's Gaussians index: a joint is one byte.
 pub(crate) const MAX_SKIN_JOINTS: usize = 256;
 /// Bytes of one projected Gaussian (`splats.wgsl` `Projected`).
-const PROJECTED_BYTES: u64 = 48;
+const PROJECTED_BYTES: u64 = 64;
 /// The side, in target pixels, of the block a level-0 texel of the splats'
 /// depth pyramid covers: a splat's box spans at least a few pixels, so the
 /// test never reads a finer level, and a coarser first level is a sixteenth
@@ -128,7 +128,11 @@ const GRID_NEAREST_W: f32 = 1e-4;
 /// A lit run's normal target under motion (`splats.wgsl`
 /// `fs_splat_lit_motion`): its Gaussians' view-space normal xy, weighted by
 /// alpha.
-const NORMAL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Float;
+const NORMAL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
+/// A lit run's material target (#11211 experiment): roughness and
+/// metalness, weighted by alpha, and the alpha its blend takes.
+const MATERIAL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 fn surface_format(motion: bool) -> wgpu::TextureFormat {
     if motion {
@@ -217,6 +221,9 @@ pub(crate) struct SplatDraw {
     pub fade_weight: f32,
     /// View-space depth bias in metres pulling surface splats in front of a co-located base mesh.
     pub surface_bias: f32,
+    /// Its Gaussians' occlusion, roughness and metalness come from their
+    /// albedo's alpha byte (`SplatAppearance::material`).
+    pub material: bool,
     /// Its instance's Gaussian group tints.
     pub groups: GroupTints,
 }
@@ -672,8 +679,10 @@ struct Layer {
     resolve: Option<wgpu::TextureView>,
     surface: wgpu::TextureView,
     surface_resolve: Option<wgpu::TextureView>,
-    /// A lit run's normal target under motion, and its resolve.
+    /// A lit run's normal target (normal xy and occlusion), and its resolve.
     normal: Option<(wgpu::TextureView, Option<wgpu::TextureView>)>,
+    /// A lit run's material target (roughness, metalness), and its resolve.
+    material: Option<(wgpu::TextureView, Option<wgpu::TextureView>)>,
     /// Its run's parameters (`splat_layer.wgsl` `Grid`).
     grid: wgpu::Buffer,
     group: wgpu::BindGroup,
@@ -1522,7 +1531,7 @@ impl Splats {
         }
         for (index, finish) in self.finishes.clone().iter().enumerate() {
             let lit = finish.lit();
-            self.layer(&gpu.device, index, target, motion || lit, motion && lit);
+            self.layer(&gpu.device, index, target, motion || lit, lit);
         }
         // The view's rotation, for a lit run's normals (view space to world).
         let view_to_world = [
@@ -1554,7 +1563,7 @@ impl Splats {
             for value in rect {
                 bytes.extend_from_slice(&value.to_le_bytes());
             }
-            let normal_target = if motion && finish.lit() { 1.0 } else { 0.0 };
+            let normal_target = if finish.lit() { 1.0 } else { 0.0 };
             for value in [cutoff, run.light.unwrap_or(0.0), normal_target, 0.0] {
                 bytes.extend_from_slice(&value.to_le_bytes());
             }
@@ -1709,7 +1718,11 @@ impl Splats {
                         first,
                         set.count,
                         u32::from(index == 0),
-                        u32::from(lit && set.albedo),
+                        match (lit && set.albedo, draw.material) {
+                            (false, _) => 0,
+                            (true, false) => 1,
+                            (true, true) => 2,
+                        },
                     ],
                     skin: [
                         palette_first,
@@ -1837,9 +1850,21 @@ impl Splats {
                             store: wgpu::StoreOp::Store,
                         },
                     }),
+                layer
+                    .material
+                    .as_ref()
+                    .map(|(view, resolve)| wgpu::RenderPassColorAttachment {
+                        view,
+                        depth_slice: None,
+                        resolve_target: resolve.as_ref(),
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
             ];
-            // The normal target only in a lit run under motion.
-            let targets = 1 + usize::from(kept) + usize::from(kept && motion && finish.lit());
+            // A lit run's normal and material targets.
+            let targets = 1 + usize::from(kept) + 2 * usize::from(kept && finish.lit());
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("render-wgpu splat layer"),
                 color_attachments: &attachments[..targets],
@@ -2204,13 +2229,14 @@ impl Splats {
                     blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 };
-                // A lit run without motion keeps its normal in the surface;
-                // under motion in a target of its own.
-                let normal = lit && surface == Some(true);
+                // A lit run keeps its normal and occlusion in a target of
+                // its own, and its roughness and metalness in another.
+                let normal = lit && surface.is_some();
                 let targets = [
                     colour,
                     surface.map(|motion| blended(surface_format(motion || lit))),
                     normal.then(|| blended(NORMAL_FORMAT)),
+                    normal.then(|| blended(MATERIAL_FORMAT)),
                 ];
                 device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                     label: Some("render-wgpu splat layer"),
@@ -2245,7 +2271,7 @@ impl Splats {
                         entry_point: Some(fragment),
                         compilation_options: Default::default(),
                         targets: &targets
-                            [..1 + usize::from(surface.is_some()) + usize::from(normal)],
+                            [..1 + usize::from(surface.is_some()) + 2 * usize::from(normal)],
                     }),
                     multiview_mask: None,
                     cache: None,
@@ -2310,6 +2336,13 @@ impl Splats {
                     .then(|| texture(1, NORMAL_FORMAT, "render-wgpu splat normal resolved")),
             )
         });
+        let material = size.4.then(|| {
+            (
+                texture(size.2, MATERIAL_FORMAT, "render-wgpu splat material"),
+                (size.2 > 1)
+                    .then(|| texture(1, MATERIAL_FORMAT, "render-wgpu splat material resolved")),
+            )
+        });
         let grid = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("render-wgpu splat grid"),
             size: GRID_BYTES,
@@ -2344,6 +2377,13 @@ impl Splats {
                         None => surface_resolve.as_ref().unwrap_or(&surface),
                     }),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 34,
+                    resource: wgpu::BindingResource::TextureView(match &material {
+                        Some((view, resolve)) => resolve.as_ref().unwrap_or(view),
+                        None => surface_resolve.as_ref().unwrap_or(&surface),
+                    }),
+                },
             ],
         });
         let layer = Layer {
@@ -2353,6 +2393,7 @@ impl Splats {
             surface,
             surface_resolve,
             normal,
+            material,
             grid,
             group,
         };
@@ -2552,6 +2593,7 @@ impl Pipelines {
                 layer_texture(31),
                 storage(32, true, wgpu::ShaderStages::FRAGMENT),
                 layer_texture(33),
+                layer_texture(34),
             ],
         );
         let pipeline_layout = |label: &str, groups: &[Option<&wgpu::BindGroupLayout>]| {
@@ -3155,10 +3197,18 @@ fn surface_words(splats: &GlbSplats) -> Vec<u32> {
                 unorm(color[0]) | unorm(color[1]) << 8 | unorm(color[2]) << 16
             })
     };
+    // `_ALBEDO`'s alpha byte rides in the normal word's top byte: a lit
+    // instance reads it as its material when `SplatAppearance::material`.
+    let material = |index: usize| {
+        splats
+            .albedos
+            .as_ref()
+            .map_or(0, |albedos| unorm(albedos[index][3]) << 24)
+    };
     normal_words(splats)
         .into_iter()
         .enumerate()
-        .flat_map(|(index, normal)| [normal, albedo(index)])
+        .flat_map(|(index, normal)| [normal | material(index), albedo(index)])
         .collect()
 }
 
@@ -3278,8 +3328,10 @@ fn octahedral(normal: Vec3) -> u32 {
     } else {
         (n.x, n.y)
     };
-    let snorm = |value: f32| ((value.clamp(-1.0, 1.0) * 32767.0).round() as i16) as u16 as u32;
-    snorm(x) | snorm(y) << 16
+    // Twelve bits an axis; the top byte carries a lit Gaussian's material
+    // (`surface_words`, #11211 experiment).
+    let snorm = |value: f32| ((value.clamp(-1.0, 1.0) * 2047.0).round() as i32 as u32) & 0xfff;
+    snorm(x) | snorm(y) << 12
 }
 
 /// The IEEE half nearest a non-negative `value` (a standard deviation):
@@ -3417,8 +3469,8 @@ mod tests {
 
     /// `splats.wgsl` `octahedral`, on the CPU.
     fn from_octahedral(word: u32) -> Vec3 {
-        let unpack = |bits: u32| f32::from(bits as u16 as i16) / 32767.0;
-        let (x, y) = (unpack(word & 0xffff), unpack(word >> 16));
+        let unpack = |bits: u32| ((((bits & 0xfff) << 20) as i32 >> 20) as f32 / 2047.0).clamp(-1.0, 1.0);
+        let (x, y) = (unpack(word), unpack(word >> 12));
         let mut n = Vec3::new(x, y, 1.0 - x.abs() - y.abs());
         if n.z < 0.0 {
             let sign = |value: f32| if value >= 0.0 { 1.0 } else { -1.0 };
@@ -3546,6 +3598,7 @@ mod tests {
             multiplier: [1.0; 3],
             fade_weight: 1.0,
             surface_bias: 0.0,
+            material: false,
             groups: GroupTints::default(),
         };
         let draws = [draw(Mat4::IDENTITY), draw(shift)];

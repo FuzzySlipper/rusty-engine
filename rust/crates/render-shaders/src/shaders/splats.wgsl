@@ -50,6 +50,10 @@ struct Projected {
     color: u32,
     axes: vec4<f32>,
     motion: vec4<f32>,
+    // A lit run's occlusion, roughness and metalness, a byte each (#11211
+    // experiment): occlusion 1, roughness 1, metalness 0 unless the
+    // instance reads them from its albedo's alpha byte.
+    material: u32,
 };
 
 struct Sort {
@@ -181,8 +185,20 @@ fn cs_project(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     // A lit run draws the albedo where the set has one, at the colour's
     // opacity.
-    if project.range.w == 1u {
+    var material = pack4x8unorm(vec4<f32>(1.0, 1.0, 0.0, 0.0));
+    if project.range.w >= 1u {
         color = vec4<f32>(unpack4x8unorm(surface_of(index).y).rgb, color.a);
+    }
+    if project.range.w == 2u {
+        // The albedo's alpha byte (the normal word's top byte): occlusion in the high nibble, roughness
+        // in bits 3..1 (0.15 .. 1), metal in bit 0.
+        let byte = surface_of(index).x >> 24u;
+        material = pack4x8unorm(vec4<f32>(
+            f32(byte >> 4u) / 15.0,
+            0.15 + 0.85 * f32((byte >> 1u) & 7u) / 7.0,
+            f32(byte & 1u),
+            0.0,
+        ));
     }
     // A tinted group's Gaussians move toward its target, in display space as
     // the colour is baked, at its weight.
@@ -291,7 +307,7 @@ fn cs_project(@builtin(global_invocation_id) id: vec3<u32>) {
     if project.depth.w > 0.5 {
         normal = normalize(to_view * (turn * octahedral(surface_of(index).x))).xy;
     }
-    projected[slot] = Projected(ndc, pack4x8unorm(color), vec4<f32>(axis1, axis2), vec4<f32>(motion, normal));
+    projected[slot] = Projected(ndc, pack4x8unorm(color), vec4<f32>(axis1, axis2), vec4<f32>(motion, normal), material);
 
     keep(slot, depth);
 }
@@ -593,6 +609,7 @@ struct SplatVarying {
     @location(1) @interpolate(flat) color: vec4<f32>,
     @location(2) @interpolate(flat) motion: vec2<f32>,
     @location(3) @interpolate(flat) normal: vec2<f32>,
+    @location(4) @interpolate(flat) material: vec4<f32>,
 };
 
 @vertex
@@ -613,6 +630,7 @@ fn vs_splat(
     out.color = color;
     out.motion = splat.motion.xy;
     out.normal = splat.motion.zw;
+    out.material = unpack4x8unorm(splat.material);
     return out;
 }
 
@@ -648,33 +666,36 @@ fn fs_splat(in: SplatVarying) -> SplatOut {
     );
 }
 
-// A lit run without motion: its normal's xy beside its depth.
-@fragment
-fn fs_splat_lit(in: SplatVarying) -> SplatOut {
+struct LitOut {
+    @location(0) color: vec4<f32>,
+    @location(1) surface: vec4<f32>,
+    // The normal's view-space xy and the occlusion, premultiplied by
+    // alpha, and the alpha its blend takes.
+    @location(2) normal: vec4<f32>,
+    // Roughness and metalness, premultiplied by alpha, and the alpha.
+    @location(3) material: vec4<f32>,
+};
+
+fn lit_out(in: SplatVarying, motion: vec2<f32>) -> LitOut {
     let alpha = splat_alpha(in);
-    return SplatOut(
+    return LitOut(
         vec4<f32>(in.color.rgb * alpha, alpha),
-        vec4<f32>(vec3<f32>(1.0 - in.position.z, in.normal) * alpha, alpha),
+        vec4<f32>(vec3<f32>(1.0 - in.position.z, motion) * alpha, alpha),
+        vec4<f32>(vec3<f32>(in.normal, in.material.x) * alpha, alpha),
+        vec4<f32>(in.material.y * alpha, in.material.z * alpha, 0.0, alpha),
     );
 }
 
-struct LitMotionOut {
-    @location(0) color: vec4<f32>,
-    @location(1) surface: vec4<f32>,
-    // The normal's view-space xy, premultiplied by alpha, and the alpha
-    // its blend takes: the RG16F target keeps xy.
-    @location(2) normal: vec4<f32>,
-};
-
-// A lit run under motion: its normal in a target of its own.
+// A lit run without motion: its depth, normal and material.
 @fragment
-fn fs_splat_lit_motion(in: SplatVarying) -> LitMotionOut {
-    let alpha = splat_alpha(in);
-    return LitMotionOut(
-        vec4<f32>(in.color.rgb * alpha, alpha),
-        vec4<f32>(vec3<f32>(1.0 - in.position.z, in.motion) * alpha, alpha),
-        vec4<f32>(in.normal * alpha, 0.0, alpha),
-    );
+fn fs_splat_lit(in: SplatVarying) -> LitOut {
+    return lit_out(in, vec2<f32>(0.0));
+}
+
+// A lit run under motion: its motion beside its depth as well.
+@fragment
+fn fs_splat_lit_motion(in: SplatVarying) -> LitOut {
+    return lit_out(in, in.motion);
 }
 
 // A layer that keeps no surface: nothing after its run reads the view's

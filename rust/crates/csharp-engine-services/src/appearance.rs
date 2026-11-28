@@ -6389,6 +6389,7 @@ impl RuntimeAppearanceBridge {
             fade_near: request.fade_near,
             fade_far: request.fade_far,
             surface_bias: request.surface_bias,
+            material: false,
         };
         if let Some(refusal) = appearance.refusal() {
             return Err(CsharpEngineServicesError::new(

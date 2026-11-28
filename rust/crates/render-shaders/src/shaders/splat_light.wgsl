@@ -11,7 +11,7 @@
 #import rusty::view::frame
 #import rusty::lighting::standard_radiance
 #import rusty::types::REACTIVE_OVERLAY
-#import rusty::splat_layer::{layer, surface_layer, grid, srgb_to_linear, linear_to_srgb, normal_at, facing_normal, block_sums, snapped}
+#import rusty::splat_layer::{layer, surface_layer, grid, srgb_to_linear, linear_to_srgb, normal_at, material_at, facing_normal, block_sums, snapped}
 
 struct CompositeVarying {
     @builtin(position) position: vec4<f32>,
@@ -35,8 +35,8 @@ fn world_normal(view: vec3<f32>) -> vec3<f32> {
 
 // `color` (linear, the baked colour as albedo) lit at `position` facing
 // `normal`, kept at least the floor's share of itself.
-fn lit(color: vec3<f32>, normal: vec3<f32>, position: vec3<f32>) -> vec3<f32> {
-    let radiance = standard_radiance(color, normal, position, 1.0, 0.0, 1.0);
+fn lit(color: vec3<f32>, normal: vec3<f32>, position: vec3<f32>, material: vec3<f32>) -> vec3<f32> {
+    let radiance = standard_radiance(color, normal, position, material.y, material.z, material.x);
     return max(radiance, color * grid.cutoff.y);
 }
 
@@ -50,7 +50,8 @@ fn lit_composite(position: vec4<f32>) -> vec4<f32> {
     let display = clamp(layered.rgb / layered.a, vec3<f32>(0.0), vec3<f32>(1.0));
     let depth = 1.0 - textureLoad(surface_layer, pixel, 0).x / layered.a;
     let normal = world_normal(facing_normal(normal_at(pixel) / layered.a));
-    let color = lit(srgb_to_linear(display), normal, world_at(position.xy, depth));
+    let material = clamp(material_at(pixel) / layered.a, vec3<f32>(0.0), vec3<f32>(1.0));
+    let color = lit(srgb_to_linear(display), normal, world_at(position.xy, depth), material);
     return vec4<f32>(color * layered.a, layered.a);
 }
 
@@ -88,7 +89,7 @@ fn lit_block(position: vec4<f32>) -> Block {
     let depth = 1.0 - sums.depth / sums.color.a;
     let centre = vec2<f32>(sums.corner) + 0.5 * f32(grid.block.z);
     let normal = world_normal(facing_normal(sums.normal / sums.color.a));
-    let color = lit(srgb_to_linear(display), normal, world_at(centre, depth));
+    let color = lit(srgb_to_linear(display), normal, world_at(centre, depth), vec3<f32>(1.0, 1.0, 0.0));
     return Block(snapped(linear_to_srgb(color), color), depth);
 }
 

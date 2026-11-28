@@ -24,6 +24,7 @@ struct Projected {
     color: u32,
     axes: vec4<f32>,
     motion: vec4<f32>,
+    material: u32,
 };
 
 @group(1) @binding(20) var<storage, read> drawn: array<Projected>;

@@ -1578,6 +1578,12 @@ pub struct SplatAppearance {
     /// occluded; 0 disables the bias.
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub surface_bias: f32,
+    /// A lit figure reads each Gaussian's occlusion, roughness and
+    /// metalness from its `_ALBEDO` alpha byte (#11211 experiment): the high
+    /// nibble occlusion (0 enclosed .. 15 open), bits 3..1 roughness, bit 0
+    /// metal. Off: occlusion 1, roughness 1, not metal.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub material: bool,
 }
 
 /// The most Gaussian groups one splat instance tints at once.
@@ -1687,6 +1693,7 @@ impl Default for SplatAppearance {
             fade_near: 0.0,
             fade_far: 0.0,
             surface_bias: 0.0,
+            material: false,
         }
     }
 }

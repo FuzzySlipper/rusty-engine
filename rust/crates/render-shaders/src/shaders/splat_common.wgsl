@@ -149,7 +149,12 @@ fn cull(slot: u32) {
 
 // A unit vector from its octahedral encoding (`splats.rs` `octahedral`).
 fn octahedral(word: u32) -> vec3<f32> {
-    let e = unpack2x16snorm(word);
+    // Twelve bits an axis, sign-extended; the top byte is a material.
+    let e = clamp(
+        vec2<f32>(f32(bitcast<i32>(word << 20u) >> 20u), f32(bitcast<i32>(word << 8u) >> 20u)) / 2047.0,
+        vec2<f32>(-1.0),
+        vec2<f32>(1.0),
+    );
     var n = vec3<f32>(e, 1.0 - abs(e.x) - abs(e.y));
     if n.z < 0.0 {
         n = vec3<f32>((1.0 - abs(n.yx)) * select(vec2<f32>(-1.0), vec2<f32>(1.0), n.xy >= vec2<f32>(0.0)), n.z);

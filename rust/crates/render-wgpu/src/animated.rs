@@ -1721,6 +1721,7 @@ impl Renderer {
                 [1.0; 3],
                 1.0,
                 0.0,
+                false,
                 crate::splats::GroupTints::default(),
             );
             bounds = bounds.union(&posed_splat_bounds(&asset.splat_sets[set], &draw));
@@ -1760,6 +1761,7 @@ impl Renderer {
             };
             let multiplier = appearance.map_or([1.0; 3], |appearance| appearance.multiplier);
             let surface_bias = appearance.map_or(0.0, |appearance| appearance.surface_bias);
+            let material = appearance.is_some_and(|appearance| appearance.material);
             let groups = match &node.kind {
                 NodeKind::AnimatedMesh(descriptor) => {
                     crate::splats::GroupTints::of(&descriptor.splat_groups)
@@ -1779,6 +1781,7 @@ impl Renderer {
                     multiplier,
                     1.0,
                     surface_bias,
+                    material,
                     groups,
                 );
                 bounds = bounds.union(&posed_splat_bounds(splat_set, &draw));
@@ -2776,6 +2779,7 @@ fn splat_draw(
     multiplier: [f32; 3],
     fade_weight: f32,
     surface_bias: f32,
+    material: bool,
     groups: crate::splats::GroupTints,
 ) -> crate::splats::SplatDraw {
     let splat_set = &asset.splat_sets[set];
@@ -2817,6 +2821,7 @@ fn splat_draw(
         multiplier,
         fade_weight,
         surface_bias,
+        material,
         groups,
     }
 }

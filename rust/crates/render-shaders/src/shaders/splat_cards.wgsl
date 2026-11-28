@@ -259,30 +259,35 @@ fn fs_card(in: CardVarying) -> CardOut {
     return CardOut(color, vec4<f32>(vec3<f32>(1.0 - in.position.z, in.motion) * color.a, color.a));
 }
 
-// A lit run without motion: its normal's xy beside its depth.
-@fragment
-fn fs_card_lit(in: CardVarying) -> CardOut {
-    let color = card_colour(in);
-    return CardOut(color, vec4<f32>(vec3<f32>(1.0 - in.position.z, in.normal) * color.a, color.a));
-}
-
-struct CardLitMotionOut {
+struct CardLitOut {
     @location(0) color: vec4<f32>,
     @location(1) surface: vec4<f32>,
-    // The normal's view-space xy, premultiplied by alpha, and the alpha its
-    // blend takes: the RG16F target keeps xy.
+    // The normal's view-space xy and occlusion (1), premultiplied by alpha.
     @location(2) normal: vec4<f32>,
+    // Roughness (1) and metalness (0), premultiplied by alpha.
+    @location(3) material: vec4<f32>,
 };
 
-// A lit run under motion: its normal in a target of its own.
-@fragment
-fn fs_card_lit_motion(in: CardVarying) -> CardLitMotionOut {
+fn card_lit_out(in: CardVarying, motion: vec2<f32>) -> CardLitOut {
     let color = card_colour(in);
-    return CardLitMotionOut(
+    return CardLitOut(
         color,
-        vec4<f32>(vec3<f32>(1.0 - in.position.z, in.motion) * color.a, color.a),
-        vec4<f32>(in.normal * color.a, 0.0, color.a),
+        vec4<f32>(vec3<f32>(1.0 - in.position.z, motion) * color.a, color.a),
+        vec4<f32>(vec3<f32>(in.normal, 1.0) * color.a, color.a),
+        vec4<f32>(color.a, 0.0, 0.0, color.a),
     );
+}
+
+// A lit run without motion.
+@fragment
+fn fs_card_lit(in: CardVarying) -> CardLitOut {
+    return card_lit_out(in, vec2<f32>(0.0));
+}
+
+// A lit run under motion.
+@fragment
+fn fs_card_lit_motion(in: CardVarying) -> CardLitOut {
+    return card_lit_out(in, in.motion);
 }
 
 // A layer that keeps no surface: nothing after its run reads the view's

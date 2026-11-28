@@ -31,6 +31,15 @@ struct Grid {
 
 @group(1) @binding(32) var<storage, read> grid: Grid;
 @group(1) @binding(33) var normal_layer: texture_2d<f32>;
+// A lit run's roughness and metalness, weighted by alpha (#11211 experiment).
+@group(1) @binding(34) var material_layer: texture_2d<f32>;
+
+// A lit run's occlusion, roughness and metalness at `pixel`, weighted by
+// alpha.
+fn material_at(pixel: vec2<i32>) -> vec3<f32> {
+    let m = textureLoad(material_layer, pixel, 0);
+    return vec3<f32>(textureLoad(normal_layer, pixel, 0).z, m.x, m.y);
+}
 
 fn srgb_to_linear(color: vec3<f32>) -> vec3<f32> {
     let low = color / 12.92;
