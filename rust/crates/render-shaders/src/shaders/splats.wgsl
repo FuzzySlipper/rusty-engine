@@ -139,6 +139,13 @@ fn cs_project(@builtin(global_invocation_id) id: vec3<u32>) {
     let gaussian = gaussians[index];
     var centre = bitcast<vec3<f32>>(gaussian.centre_color.xyz);
     var color = unpack4x8unorm(gaussian.centre_color.w);
+    // Distance fade over a synchronized base mesh: Beer-Lambert optical-depth
+    // scaling (1 - (1 - a)^w) fades stacked Gaussians evenly regardless of
+    // local overdraw and lets `alpha_reach` shrink quads as fade falls.
+    let fade = project.tint.w;
+    if fade < 0.9999 {
+        color.a = 1.0 - pow(1.0 - min(color.a, 0.99), max(fade, 0.0));
+    }
     if color.a < ALPHA_MIN {
         cull(slot);
         return;
@@ -242,7 +249,15 @@ fn cs_project(@builtin(global_invocation_id) id: vec3<u32>) {
     let l1 = 2.0 * min(sqrt(2.0 * lambda1), longest);
     let l2 = 2.0 * min(sqrt(2.0 * lambda2), longest);
 
-    let ndc = clip.xyz / clip.w;
+    var ndc = clip.xyz / clip.w;
+    // Pull depth test & Hi-Z occlusion forward toward the camera by
+    // `surface_bias` metres so surface detail splats sit cleanly over a
+    // full-surface base mesh while back-face splats stay occluded.
+    let surface_bias = bitcast<f32>(project.groups.w);
+    if surface_bias > 0.0 && !ortho {
+        let d_biased = max(depth - surface_bias, 1e-4);
+        ndc.z = clamp(1.0 - (1.0 - ndc.z) * (depth / d_biased), 0.0, 1.0);
+    }
     let cut = alpha_reach(color.a);
     let reach = vec2<f32>(max(l1, l2) * cut) * 2.0 / size;
     if any(abs(ndc.xy) - reach > vec2<f32>(1.0)) || ndc.z < 0.0 || ndc.z > 1.0 {

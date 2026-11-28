@@ -213,6 +213,10 @@ pub(crate) struct SplatDraw {
     pub palette: std::sync::Arc<[[f32; 12]]>,
     /// Linear-light colour multiplier (`SplatAppearance`).
     pub multiplier: [f32; 3],
+    /// Distance-based optical-depth fade weight in [0, 1] (`SplatAppearance::fade_near`/`fade_far`).
+    pub fade_weight: f32,
+    /// View-space depth bias in metres pulling surface splats in front of a co-located base mesh.
+    pub surface_bias: f32,
     /// Its instance's Gaussian group tints.
     pub groups: GroupTints,
 }
@@ -987,9 +991,10 @@ impl Splats {
                         depth: [0.0, 1.0, ortho, 0.0],
                         range: [out.total, set.count, 0, 0],
                         skin: [palette_first, u32::from(skinned), palette_first, 0],
-                        tint: [1.0, 1.0, 1.0, 0.0],
+                        tint: [1.0, 1.0, 1.0, 1.0],
                         pixels: [0.0; 4],
                         groups: GroupTints::default(),
+                        surface_bias: 0.0,
                         occlusion: [0.0; 4],
                     };
                     out.sets
@@ -1712,9 +1717,10 @@ impl Splats {
                         previous_first,
                         u32::from(previous_pixels.is_some()),
                     ],
-                    tint: [r, g, b, 0.0],
+                    tint: [r, g, b, draw.fade_weight],
                     pixels,
                     groups: draw.groups,
+                    surface_bias: draw.surface_bias,
                     occlusion: match &occluded {
                         Some((_, levels)) if run_tested => [
                             OCCLUSION_BLOCK as f32,
@@ -2836,6 +2842,7 @@ struct ProjectSlot {
     tint: [f32; 4],
     pixels: [f32; 4],
     groups: GroupTints,
+    surface_bias: f32,
     /// Tested against the view's depth pyramid, its levels and the target
     /// pixel its level 0 starts at (`splat_common.wgsl` `occlusion`).
     occlusion: [f32; 4],
@@ -2857,7 +2864,12 @@ impl ProjectSlot {
             slot.extend_from_slice(&value.to_le_bytes());
         }
         let groups = self.groups;
-        for value in [groups.ids[0], groups.ids[1], groups.count, 0] {
+        for value in [
+            groups.ids[0],
+            groups.ids[1],
+            groups.count,
+            self.surface_bias.to_bits(),
+        ] {
             slot.extend_from_slice(&value.to_le_bytes());
         }
         for value in groups.tints.into_iter().flatten() {
@@ -3532,6 +3544,8 @@ mod tests {
             model,
             palette: std::sync::Arc::from([]),
             multiplier: [1.0; 3],
+            fade_weight: 1.0,
+            surface_bias: 0.0,
             groups: GroupTints::default(),
         };
         let draws = [draw(Mat4::IDENTITY), draw(shift)];

@@ -1719,6 +1719,8 @@ impl Renderer {
                 set,
                 world,
                 [1.0; 3],
+                1.0,
+                0.0,
                 crate::splats::GroupTints::default(),
             );
             bounds = bounds.union(&posed_splat_bounds(&asset.splat_sets[set], &draw));
@@ -1735,6 +1737,7 @@ impl Renderer {
         layer: crate::frame::ViewLayer,
         view_proj: &Mat4,
         eye: Vec3,
+        apply_fade: bool,
     ) -> Vec<crate::splats::SplatInstance> {
         let frustum = crate::batch::Frustum::new(view_proj);
         let mut instances = Vec::new();
@@ -1756,6 +1759,7 @@ impl Renderer {
                 _ => None,
             };
             let multiplier = appearance.map_or([1.0; 3], |appearance| appearance.multiplier);
+            let surface_bias = appearance.map_or(0.0, |appearance| appearance.surface_bias);
             let groups = match &node.kind {
                 NodeKind::AnimatedMesh(descriptor) => {
                     crate::splats::GroupTints::of(&descriptor.splat_groups)
@@ -1767,13 +1771,41 @@ impl Renderer {
             for &(glb_node, set) in &asset.splat_nodes {
                 let splat_set = &asset.splat_sets[set];
                 let draw = splat_draw(
-                    instance, asset, glb_node, set, node.world, multiplier, groups,
+                    instance,
+                    asset,
+                    glb_node,
+                    set,
+                    node.world,
+                    multiplier,
+                    1.0,
+                    surface_bias,
+                    groups,
                 );
                 bounds = bounds.union(&posed_splat_bounds(splat_set, &draw));
                 sets.push(draw);
             }
             if bounds.is_empty() || !frustum.intersects(&bounds) {
                 continue;
+            }
+            let depth_sq = ((bounds.min + bounds.max) * 0.5).distance_squared(eye);
+            if apply_fade {
+                if let Some(a) = appearance.filter(|a| a.fade_far > a.fade_near) {
+                    let dist = depth_sq.sqrt();
+                    if dist >= a.fade_far {
+                        continue;
+                    }
+                    let weight = if dist <= a.fade_near {
+                        1.0
+                    } else {
+                        let u = (dist - a.fade_near) / (a.fade_far - a.fade_near);
+                        1.0 - u * u * (3.0 - 2.0 * u)
+                    };
+                    if weight < 1.0 {
+                        for draw in &mut sets {
+                            draw.fade_weight = weight;
+                        }
+                    }
+                }
             }
             let grid = appearance
                 .filter(|appearance| appearance.pixel_grid > 0)
@@ -1802,7 +1834,7 @@ impl Renderer {
             instances.push(crate::splats::SplatInstance {
                 handle: *handle,
                 sets,
-                depth: ((bounds.min + bounds.max) * 0.5).distance_squared(eye),
+                depth: depth_sq,
                 bounds,
                 grid,
                 light,
@@ -1864,6 +1896,7 @@ impl Renderer {
                     crate::frame::ViewLayer::World,
                     &camera.view_proj,
                     camera.eye,
+                    false,
                 )
                 .into_iter()
                 // A core casts through the opaque meshes' shadow pass.
@@ -2741,6 +2774,8 @@ fn splat_draw(
     set: usize,
     world: Mat4,
     multiplier: [f32; 3],
+    fade_weight: f32,
+    surface_bias: f32,
     groups: crate::splats::GroupTints,
 ) -> crate::splats::SplatDraw {
     let splat_set = &asset.splat_sets[set];
@@ -2780,6 +2815,8 @@ fn splat_draw(
         model,
         palette,
         multiplier,
+        fade_weight,
+        surface_bias,
         groups,
     }
 }

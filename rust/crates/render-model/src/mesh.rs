@@ -1561,6 +1561,23 @@ pub struct SplatAppearance {
     /// default), as its own Gaussians, or as an ellipsoid per joint.
     #[serde(default, skip_serializing_if = "SplatShadowCaster::is_none")]
     pub shadow_caster: SplatShadowCaster,
+    /// Camera distance in metres where the splat layer begins fading out over
+    /// a co-located base mesh (weight 1 up to `fade_near`). Ignored when
+    /// `fade_far <= fade_near` (the default: 0, 0 draws splats at every
+    /// distance).
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub fade_near: f32,
+    /// Camera distance in metres where the splat layer finishes fading out
+    /// (weight 0 from `fade_far` on, skipping splat projection, sort and draw
+    /// completely).
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub fade_far: f32,
+    /// Metres to pull splat depth testing and Hi-Z occlusion forward toward
+    /// the camera in view space so surface detail splats sit cleanly over a
+    /// full-surface base mesh without Z-fighting while back-face splats stay
+    /// occluded; 0 disables the bias.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub surface_bias: f32,
 }
 
 /// The most Gaussian groups one splat instance tints at once.
@@ -1667,6 +1684,9 @@ impl Default for SplatAppearance {
             lighting: SplatLighting::Unlit,
             light_floor: 0.0,
             shadow_caster: SplatShadowCaster::None,
+            fade_near: 0.0,
+            fade_far: 0.0,
+            surface_bias: 0.0,
         }
     }
 }
@@ -1713,6 +1733,17 @@ impl SplatAppearance {
         }
         if !(0.0..=1.0).contains(&self.light_floor) {
             return Some("a splat light floor is from 0 to 1");
+        }
+        if !(self.fade_near.is_finite()
+            && self.fade_near >= 0.0
+            && self.fade_far.is_finite()
+            && self.fade_far >= 0.0)
+            || (self.fade_far > 0.0 && self.fade_far <= self.fade_near)
+        {
+            return Some("a splat distance fade takes finite non-negative near and far metres, with far above near (or 0 to disable)");
+        }
+        if !(self.surface_bias.is_finite() && self.surface_bias >= 0.0) {
+            return Some("a splat surface bias is finite and not negative");
         }
         None
     }

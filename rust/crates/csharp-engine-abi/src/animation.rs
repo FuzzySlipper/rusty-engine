@@ -237,6 +237,16 @@ pub struct NativeSplatAppearanceRequest {
     /// How it casts into shadow maps while its instance casts: not at all,
     /// as its own Gaussians (its silhouette), or as an ellipsoid per joint.
     pub shadow_caster: NativeSplatShadowCaster,
+    /// Camera distance in metres where the splat layer begins fading out over
+    /// a co-located base mesh (0, 0 disables distance fade).
+    pub fade_near: f32,
+    /// Camera distance in metres where the splat layer finishes fading out and
+    /// is skipped completely (0 disables distance fade).
+    pub fade_far: f32,
+    /// Metres to pull splat depth testing and Hi-Z occlusion forward toward
+    /// the camera in view space so surface splats sit cleanly over a
+    /// full-surface base mesh without Z-fighting; 0 disables the bias.
+    pub surface_bias: f32,
 }
 
 /// Tints one Gaussian group of an animation instance's splats

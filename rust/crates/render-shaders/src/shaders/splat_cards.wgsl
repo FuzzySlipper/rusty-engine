@@ -116,7 +116,7 @@ fn cs_project_card(@builtin(global_invocation_id) id: vec3<u32>) {
             carried = blend;
         }
     }
-    let clip = project.clip_from_model * vec4<f32>(centre, 1.0);
+    var clip = project.clip_from_model * vec4<f32>(centre, 1.0);
     let clip_u = project.clip_from_model * vec4<f32>(u, 0.0);
     let clip_v = project.clip_from_model * vec4<f32>(v, 0.0);
     let depth = -(project.model_view * vec4<f32>(centre, 1.0)).z;
@@ -124,6 +124,12 @@ fn cs_project_card(@builtin(global_invocation_id) id: vec3<u32>) {
     if clip.w <= 1e-6 || (!ortho && depth <= 1e-6) {
         cull(slot);
         return;
+    }
+    let surface_bias = bitcast<f32>(project.groups.w);
+    if surface_bias > 0.0 && !ortho {
+        let d_biased = max(depth - surface_bias, 1e-4);
+        let ndc_z = clip.z / clip.w;
+        clip.z = clamp(1.0 - (1.0 - ndc_z) * (depth / d_biased), 0.0, 1.0) * clip.w;
     }
     // Dropped when all four corners it draws lie beyond one side of the
     // view, or when, all in front of the eye, they lie behind the opaque
@@ -174,7 +180,7 @@ fn cs_project_card(@builtin(global_invocation_id) id: vec3<u32>) {
         clip_u,
         clip_v,
         vec4<f32>(motion, normal),
-        vec4<f32>(project.tint.rgb, 0.0),
+        vec4<f32>(project.tint.rgb, project.tint.w),
         vec4<u32>(card.centre_tile.w, card.frame.w, pack4x8unorm(group_tint(index)), project.range.w),
     );
     keep(slot, depth);
@@ -184,7 +190,7 @@ struct CardVarying {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) tint: vec4<f32>,
-    @location(2) @interpolate(flat) multiplier: vec3<f32>,
+    @location(2) @interpolate(flat) multiplier: vec4<f32>,
     @location(3) @interpolate(flat) motion: vec2<f32>,
     @location(4) @interpolate(flat) normal: vec2<f32>,
     @location(5) @interpolate(flat) albedo: u32,
@@ -205,7 +211,7 @@ fn vs_card(
     out.position = card.centre + corner.x * card.u + corner.y * card.v;
     out.uv = (tile + 0.5 + t * (side - 1.0)) / vec2<f32>(textureDimensions(atlas));
     out.tint = unpack4x8unorm(card.look.z);
-    out.multiplier = card.multiplier.rgb;
+    out.multiplier = card.multiplier;
     out.motion = card.motion.xy;
     out.normal = card.motion.zw;
     out.albedo = card.look.w;
@@ -219,7 +225,11 @@ fn vs_card(
 // too faint to show are discarded.
 fn card_colour(in: CardVarying) -> vec4<f32> {
     let texel = textureSample(atlas, atlas_sampler, in.uv);
-    let alpha = min(0.99, texel.a);
+    var alpha = min(0.99, texel.a);
+    let fade = in.multiplier.w;
+    if fade < 0.9999 {
+        alpha = 1.0 - pow(1.0 - alpha, max(fade, 0.0));
+    }
     if alpha < ALPHA_MIN {
         discard;
     }
@@ -229,8 +239,8 @@ fn card_colour(in: CardVarying) -> vec4<f32> {
         colour = textureSampleLevel(albedo_atlas, atlas_sampler, in.uv, 0.0).rgb;
     }
     var rgb = mix(colour, in.tint.rgb, in.tint.a);
-    if any(in.multiplier != vec3<f32>(1.0)) {
-        rgb = linear_to_srgb(srgb_to_linear(rgb) * in.multiplier);
+    if any(in.multiplier.rgb != vec3<f32>(1.0)) {
+        rgb = linear_to_srgb(srgb_to_linear(rgb) * in.multiplier.rgb);
     }
     return vec4<f32>(rgb * alpha, alpha);
 }

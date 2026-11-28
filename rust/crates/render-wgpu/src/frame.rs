@@ -4334,7 +4334,7 @@ impl Renderer {
         // Splat instances take their places among the blended draws; their
         // runs draw into layers between the opaque and blended passes.
         let splat_instances = if self.splats.draws() {
-            self.splat_instances(view.layer, &view_proj, eye)
+            self.splat_instances(view.layer, &view_proj, eye, true)
         } else {
             Vec::new()
         };

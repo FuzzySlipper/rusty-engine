@@ -34,6 +34,17 @@ pub(crate) fn is_core_primitive(primitive: &gltf::Primitive<'_>) -> bool {
         })
 }
 
+/// Whether `primitive` is a hybrid splat figure's full-surface textured base
+/// mesh: `TRIANGLES` marked `extras.splatBaseMesh = true`. Unlike a matte
+/// inset core, it carries its own PBR material and stays drawn at all
+/// distances as the splat detail layer fades over it.
+pub(crate) fn is_base_mesh_primitive(primitive: &gltf::Primitive<'_>) -> bool {
+    primitive.mode() == gltf::mesh::Mode::Triangles
+        && extras(primitive).is_some_and(|extras| {
+            extras.get("splatBaseMesh").and_then(|base| base.as_bool()) == Some(true)
+        })
+}
+
 /// Whether `primitive` is a splat primitive: `POINTS` with `_SCALE`, or
 /// `POINTS` marked as cards.
 pub(crate) fn is_splat_primitive(primitive: &gltf::Primitive<'_>) -> bool {
@@ -120,6 +131,17 @@ fn measure_splats(parsed: &ParsedGltf<'_>) -> Result<MeshSourceBounds, ImportDia
                 check_core_primitive(document, &mesh, &primitive, &path, data)?;
                 continue;
             }
+            if is_base_mesh_primitive(&primitive) {
+                if primitive.get(&gltf::Semantic::Positions).is_none() {
+                    return Err(ImportDiagnostic::error(
+                        ImportCode::MalformedSource,
+                        format!("{path}.attributes.POSITION"),
+                        "a splat base mesh primitive must carry POSITION",
+                        "export POSITION on every splatBaseMesh primitive",
+                    ));
+                }
+                continue;
+            }
             if !is_splat_primitive(&primitive) {
                 return Err(ImportDiagnostic::error(
                     ImportCode::UnsupportedFeature,
@@ -167,11 +189,29 @@ fn measure_splats(parsed: &ParsedGltf<'_>) -> Result<MeshSourceBounds, ImportDia
         } else {
             model_matrix(document, &parents, node.index())
         };
-        // A core stands inside the splats and does not widen their bounds.
+        // A core stands inside the splats and does not widen their bounds; a
+        // full-surface base mesh does, so sparse detail-shell splats keep full
+        // figure bounds.
         for primitive in mesh
             .primitives()
             .filter(|primitive| !is_core_primitive(primitive))
         {
+            if is_base_mesh_primitive(&primitive) {
+                let positions = floats::<3>(
+                    primitive
+                        .get(&gltf::Semantic::Positions)
+                        .expect("checked above"),
+                    data,
+                )?;
+                for vertex in &positions {
+                    let point = transform_point(&model, *vertex);
+                    for axis in 0..3 {
+                        min[axis] = min[axis].min(point[axis]);
+                        max[axis] = max[axis].max(point[axis]);
+                    }
+                }
+                continue;
+            }
             let attribute = |semantic: gltf::Semantic| {
                 primitive
                     .get(&semantic)
